@@ -6,7 +6,7 @@ from datetime import datetime
 # 1. Configuração Inicial da Página (Visual Tema O Boticário)
 st.set_page_config(
     page_title="Painel de Performance de Estoque NSF - CP Fani",
-    page_icon="📊",
+    page_icon="",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -159,8 +159,8 @@ with col_logo:
         st.warning("Logo não encontrada. Certifique-se de que o arquivo 'logo_cp_fani.png' está na raiz do projeto.")
 
 with col_info:
-    st.title("📊 Painel de Controle de Estoques e Ruptura")
-    st.caption(f" Última atualização da base: **{horario_atualizacao}** | Fonte: Google Sheets")
+    st.title(" Painel de Controle de Estoques e Ruptura")
+    st.caption(f"🕒 Última atualização da base: **{horario_atualizacao}** | Fonte: Google Sheets")
 
 st.markdown("---")
 
@@ -211,6 +211,7 @@ v_excesso_total_total = 0
 v_falta_total_total = 0
 v_custo_estoque_atual_total = 0
 v_custo_estoque_min_total = 0
+qtd_itens_total = 0
 
 for nome_marca, df_completo in dados_filtrados.items():
     df_loja = df_completo[df_completo['PDV'] == pdv_selecionado]
@@ -221,6 +222,7 @@ for nome_marca, df_completo in dados_filtrados.items():
         v_falta_total_total += df_loja['Valor_Falta'].sum()
         v_custo_estoque_atual_total += df_loja['Valor_Custo_Estoque_Atual'].sum()
         v_custo_estoque_min_total += df_loja['Valor_Custo_Estoque_Minimo'].sum()
+        qtd_itens_total += df_loja['Estoque Atual'].sum()
 
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("💰 Valor Estoque Atual (Venda)", f"R$ {v_estoque_atual_total:,.2f}")
@@ -235,7 +237,7 @@ col5.metric("💵 Custo Total do Estoque Atual", f"R$ {v_custo_estoque_atual_tot
 col6.metric("💵 Custo Total do Estoque Mínimo", f"R$ {v_custo_estoque_min_total:,.2f}", help="Soma do preço de tabela do estoque mínimo necessário")
 
 # ==========================================
-# GRÁFICO COMPARATIVO POR MARCA
+# GRÁFICO COMPARATIVO POR MARCA (Quantidade de Itens + Custo Total)
 # ==========================================
 if marca_selecionada == "Todas as Marcas":
     st.markdown("---")
@@ -248,10 +250,7 @@ if marca_selecionada == "Todas as Marcas":
         if not df_loja.empty:
             dados_grafico.append({
                 'Marca': nome_marca,
-                'Estoque Atual': df_loja['Valor_Estoque_Atual'].sum(),
-                'Estoque Mínimo': df_loja['Valor_Estoque_Minimo'].sum(),
-                'Excesso': df_loja['Valor_Excesso'].sum(),
-                'Falta': df_loja['Valor_Falta'].sum(),
+                'Qtd Itens': int(df_loja['Estoque Atual'].sum()),
                 'Custo Total': df_loja['Valor_Custo_Estoque_Atual'].sum()
             })
     
@@ -261,24 +260,24 @@ if marca_selecionada == "Todas as Marcas":
         col_graf1, col_graf2 = st.columns(2)
         
         with col_graf1:
-            fig_marcas = go.Figure()
-            fig_marcas.add_trace(go.Bar(
+            fig_qtd_marcas = go.Figure()
+            fig_qtd_marcas.add_trace(go.Bar(
                 x=df_grafico_marcas['Marca'], 
-                y=df_grafico_marcas['Estoque Atual'], 
-                name='Estoque Atual',
+                y=df_grafico_marcas['Qtd Itens'], 
+                name='Quantidade de Itens',
                 marker_color=[CORES_MARCAS.get(m, '#007A33') for m in df_grafico_marcas['Marca']],
-                text=[f"R$ {v:,.0f}" for v in df_grafico_marcas['Estoque Atual']],
+                text=[f"{v:,.0f}" for v in df_grafico_marcas['Qtd Itens']],
                 textposition='auto'
             ))
-            fig_marcas.update_layout(
+            fig_qtd_marcas.update_layout(
                 template='plotly_dark',
                 plot_bgcolor='rgba(0,0,0,0)',
                 paper_bgcolor='rgba(0,0,0,0)',
                 height=400,
-                title='Valor de Estoque Atual por Marca',
-                yaxis_title='Valor (R$)'
+                title='Quantidade de Itens por Marca',
+                yaxis_title='Qtd de Unidades em Estoque'
             )
-            st.plotly_chart(fig_marcas, use_container_width=True)
+            st.plotly_chart(fig_qtd_marcas, use_container_width=True)
         
         with col_graf2:
             fig_custo_marcas = go.Figure()
@@ -459,7 +458,7 @@ for nome_marca, df_completo in dados_filtrados.items():
     
     col_tab1, col_tab2 = st.columns(2)
     with col_tab1:
-        st.write("### 🛑 Maiores Excessos Críticos (Dinheiro Parado)")
+        st.write("### 🛑 Excessos Críticos")
         df_excesso_tabela = df_loja[df_loja['Valor_Excesso'] > 0][
             ['SKU', 'Descrição', 'Classe', 'Estoque Atual', 'Estoque_Minimo_Qtd', 'Qtd_Excesso', 'Preço tabela', 'Valor_Excesso']
         ].sort_values(by='Valor_Excesso', ascending=False)
