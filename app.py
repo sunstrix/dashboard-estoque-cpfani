@@ -67,11 +67,20 @@ def carregar_dados_nuvem(url):
                 df['Estoque Atual'] = pd.to_numeric(df['Estoque Atual'], errors='coerce').fillna(0)
                 df['Preço tabela'] = pd.to_numeric(df['Preço tabela'], errors='coerce').fillna(0)
                 
+                # Tenta ler a coluna de Preço de Custo (nomes possíveis)
+                colunas_custo_possiveis = ['Preço de Custo', 'Custo Unitário', 'Custo', 'Preco de Custo', 'Preco_Custo']
+                df['Preço de Custo'] = 0  # Valor padrão
+                
+                for col_custo in colunas_custo_possiveis:
+                    if col_custo in df.columns:
+                        df['Preço de Custo'] = pd.to_numeric(df[col_custo], errors='coerce').fillna(0)
+                        break
+                
                 # Regras de Estoque Mínimo por Curva
                 regras_minimo = {'A': 15, 'B': 10, 'C': 5, 'E': 2}
                 df['Estoque_Minimo_Qtd'] = df['Classe'].map(regras_minimo).fillna(2)
                 
-                # Cálculos Financeiros Dinâmicos
+                # Cálculos Financeiros Dinâmicos - Preço de Venda
                 df['Valor_Estoque_Atual'] = df['Estoque Atual'] * df['Preço tabela']
                 df['Valor_Estoque_Minimo'] = df['Estoque_Minimo_Qtd'] * df['Preço tabela']
                 
@@ -80,6 +89,10 @@ def carregar_dados_nuvem(url):
                 
                 df['Qtd_Falta'] = (df['Estoque_Minimo_Qtd'] - df['Estoque Atual']).clip(lower=0)
                 df['Valor_Falta'] = df['Qtd_Falta'] * df['Preço tabela']
+                
+                # NOVOS CÁLCULOS - Preço de Custo
+                df['Valor_Custo_Estoque_Atual'] = df['Estoque Atual'] * df['Preço de Custo']
+                df['Valor_Custo_Estoque_Minimo'] = df['Estoque_Minimo_Qtd'] * df['Preço de Custo']
                 
                 dicionario_marcas[nome_exibicao] = df
             else:
@@ -128,17 +141,74 @@ for i, (nome_marca, df_completo) in enumerate(dados_marcas.items()):
             st.warning(f"Sem registros de movimentação para este PDV na marca {nome_marca}.")
             continue
             
-        # KPIs
+        # KPIs - Preço de Venda
         v_estoque_atual = df_loja['Valor_Estoque_Atual'].sum()
         v_estoque_min = df_loja['Valor_Estoque_Minimo'].sum()
         v_excesso_total = df_loja['Valor_Excesso'].sum()
         v_falta_total = df_loja['Valor_Falta'].sum()
         
+        # KPIs - Preço de Custo
+        v_custo_estoque_atual = df_loja['Valor_Custo_Estoque_Atual'].sum()
+        v_custo_estoque_min = df_loja['Valor_Custo_Estoque_Minimo'].sum()
+        
         col1, col2, col3, col4 = st.columns(4)
-        col1.metric("💰 Valor Estoque Atual", f"R$ {v_estoque_atual:,.2f}")
-        col2.metric("📉 Valor Estoque Mínimo", f"R$ {v_estoque_min:,.2f}")
+        col1.metric("💰 Valor Estoque Atual (Venda)", f"R$ {v_estoque_atual:,.2f}")
+        col2.metric("📉 Valor Estoque Mínimo (Venda)", f"R$ {v_estoque_min:,.2f}")
         col3.metric("️ Capital Preso (Excesso)", f"R$ {v_excesso_total:,.2f}", delta=f"{((v_excesso_total/v_estoque_atual)*100 if v_estoque_atual > 0 else 0):.1f}% do estoque", delta_color="inverse")
         col4.metric(" Risco de Ruptura (Falta)", f"R$ {v_falta_total:,.2f}", delta="Abaixo do Mínimo", delta_color="off")
+        
+        # Nova linha de KPIs - Custo
+        st.markdown("---")
+        st.subheader("💵 Análise de Custos")
+        col5, col6 = st.columns(2)
+        col5.metric("💵 Custo Total do Estoque Atual", f"R$ {v_custo_estoque_atual:,.2f}", help="Soma do preço de custo de todos os produtos em estoque")
+        col6.metric("💵 Custo Total do Estoque Mínimo", f"R$ {v_custo_estoque_min:,.2f}", help="Soma do preço de custo do estoque mínimo necessário")
+        
+        # Tabela de Custo por Curva (A, B, C, E)
+        st.markdown("---")
+        st.subheader("📊 Custo Total por Curva de Produto")
+        
+        if 'Classe' in df_loja.columns:
+            # Agrupa por Classe e calcula o total de custo do estoque atual
+            custo_por_curva = df_loja.groupby('Classe')['Valor_Custo_Estoque_Atual'].sum().reset_index()
+            custo_por_curva.columns = ['Curva', 'Custo Total (R$)']
+            
+            # Adiciona quantidade de SKUs por curva
+            skus_por_curva = df_loja.groupby('Classe').size().reset_index(name='Qtd SKUs')
+            custo_por_curva = custo_por_curva.merge(skus_por_curva, on='Curva', how='left')
+            
+            # Formata para exibição
+            custo_por_curva = custo_por_curva.sort_values('Curva')
+            custo_por_curva['Custo Total (R$)'] = custo_por_curva['Custo Total (R$)'].apply(lambda x: f"R$ {x:,.2f}")
+            
+            # Exibe a tabela
+            st.dataframe(custo_por_curva, use_container_width=True, hide_index=True)
+            
+            # Gráfico de custo por curva
+            df_grafico_custo = df_loja.groupby('Classe')['Valor_Custo_Estoque_Atual'].sum().reset_index()
+            df_grafico_custo.columns = ['Curva', 'Custo Total']
+            
+            if not df_grafico_custo.empty:
+                fig_custo = go.Figure()
+                fig_custo.add_trace(go.Bar(
+                    x=df_grafico_custo['Curva'], 
+                    y=df_grafico_custo['Custo Total'], 
+                    marker_color=['#00f2fe', '#ff4b4b', '#ffa500', '#90ee90'],
+                    text=[f"R$ {v:,.2f}" for v in df_grafico_custo['Custo Total']],
+                    textposition='auto'
+                ))
+                fig_custo.update_layout(
+                    template='plotly_dark', 
+                    plot_bgcolor='rgba(0,0,0,0)', 
+                    paper_bgcolor='rgba(0,0,0,0)', 
+                    height=350,
+                    xaxis_title='Curva',
+                    yaxis_title='Custo Total (R$)',
+                    showlegend=False
+                )
+                st.plotly_chart(fig_custo, use_container_width=True)
+        else:
+            st.warning("Coluna 'Classe' não encontrada nos dados.")
         
         st.markdown("---")
         
