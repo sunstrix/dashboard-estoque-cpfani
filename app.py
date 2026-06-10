@@ -142,13 +142,28 @@ for i, (nome_marca, df_completo) in enumerate(dados_marcas.items()):
         
         st.markdown("---")
         
-        # Gráfico
-        df_grafico = df_loja.groupby('Categoria')[['Valor_Estoque_Atual', 'Valor_Estoque_Minimo']].sum().reset_index()
-        fig = go.Figure()
-        fig.add_trace(go.Bar(x=df_grafico['Categoria'], y=df_grafico['Valor_Estoque_Atual'], name='Estoque Atual (R$)', marker_color='#00f2fe'))
-        fig.add_trace(go.Bar(x=df_grafico['Categoria'], y=df_grafico['Valor_Estoque_Minimo'], name='Estoque Mínimo (R$)', marker_color='#ff4b4b'))
-        fig.update_layout(barmode='group', template='plotly_dark', background_color='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', height=320)
-        st.plotly_chart(fig, use_container_width=True)
+        # Gráfico - Verifica se a coluna Categoria existe e se há dados
+        if 'Categoria' in df_loja.columns:
+            df_grafico = df_loja.groupby('Categoria')[['Valor_Estoque_Atual', 'Valor_Estoque_Minimo']].sum().reset_index()
+            
+            if not df_grafico.empty:
+                fig = go.Figure()
+                fig.add_trace(go.Bar(x=df_grafico['Categoria'], y=df_grafico['Valor_Estoque_Atual'], name='Estoque Atual (R$)', marker_color='#00f2fe'))
+                fig.add_trace(go.Bar(x=df_grafico['Categoria'], y=df_grafico['Valor_Estoque_Minimo'], name='Estoque Mínimo (R$)', marker_color='#ff4b4b'))
+                fig.update_layout(
+                    barmode='group', 
+                    template='plotly_dark', 
+                    plot_bgcolor='rgba(0,0,0,0)', 
+                    paper_bgcolor='rgba(0,0,0,0)', 
+                    height=320,
+                    xaxis_title='Categoria',
+                    yaxis_title='Valor (R$)'
+                )
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("Sem dados suficientes para gerar o gráfico de categorias.")
+        else:
+            st.warning("Coluna 'Categoria' não encontrada nos dados.")
         
         st.markdown("---")
         
