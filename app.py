@@ -50,17 +50,6 @@ st.markdown("""
     .stProgress > div > div > div > div {
         background-color: #007A33;
     }
-    
-    /* Estilo para logos das marcas inline */
-    .marca-logo {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-    }
-    .marca-logo img {
-        vertical-align: middle;
-        border-radius: 4px;
-    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -112,15 +101,23 @@ CORES_MARCAS = {
     'Quem Disse, Berenice?': '#ff4b4b'
 }
 
-def exibir_marca_com_logo(nome_marca, tamanho_logo=22):
+def exibir_titulo_marca(nome_marca, tamanho_logo=30):
     """
-    Retorna uma string HTML com a logo da marca seguida do nome.
-    Usado para exibir marcas de forma visualmente rica em elementos markdown.
+    Exibe o título de uma marca com sua logo usando st.columns + st.image.
+    Esta é a forma correta de exibir imagens no Streamlit.
     """
-    logo_path = LOGOS_MARCAS.get(nome_marca, '')
-    if logo_path:
-        return f"<span class='marca-logo'><img src='{logo_path}' width='{tamanho_logo}' height='{tamanho_logo}'> {nome_marca}</span>"
-    return nome_marca
+    col_logo, col_nome = st.columns([0.1, 0.9])
+    with col_logo:
+        logo_path = LOGOS_MARCAS.get(nome_marca, '')
+        if logo_path:
+            try:
+                st.image(logo_path, width=tamanho_logo)
+            except Exception:
+                st.write("🏷️")
+        else:
+            st.write("️")
+    with col_nome:
+        st.markdown(f"### {nome_marca}")
 
 def obter_horario_brasilia():
     """
@@ -221,21 +218,26 @@ pdv_selecionado = int(loja_selecionada_nome.split(" - ")[0])
 
 st.sidebar.markdown("---")
 
-# Filtro de Marca (com logos)
+# Filtro de Marca (apenas nomes, sem HTML - Streamlit não renderiza HTML em selectbox)
 st.sidebar.subheader("Filtro de Marca")
-opcoes_marca_display = ["Todas as Marcas"] + [exibir_marca_com_logo(m) for m in dados_marcas.keys()]
-opcoes_marca_valor = ["Todas as Marcas"] + list(dados_marcas.keys())
+opcoes_marca = ["Todas as Marcas"] + list(dados_marcas.keys())
+marca_selecionada = st.sidebar.selectbox("Selecione a Marca:", opcoes_marca)
 
-# Mapeia índice selecionado para valor real
-indice_selecionado = st.sidebar.selectbox(
-    "Selecione a Marca:", 
-    range(len(opcoes_marca_display)),
-    format_func=lambda x: opcoes_marca_display[x]
-)
-marca_selecionada = opcoes_marca_valor[indice_selecionado]
+# Exibe as logos das marcas na sidebar como referência visual
+st.sidebar.markdown("**Marcas disponíveis:**")
+col_logos_sidebar = st.sidebar.columns(len(dados_marcas))
+for idx, (nome_marca, df_marca) in enumerate(dados_marcas.items()):
+    with col_logos_sidebar[idx]:
+        logo_path = LOGOS_MARCAS.get(nome_marca, '')
+        if logo_path:
+            try:
+                st.image(logo_path, width=40)
+            except Exception:
+                pass
+        st.caption(nome_marca)
 
 st.sidebar.markdown("---")
-if st.sidebar.button(" Forçar Atualização dos Dados"):
+if st.sidebar.button("🔄 Forçar Atualização dos Dados"):
     st.cache_data.clear()
     st.rerun()
 
@@ -276,10 +278,10 @@ for nome_marca, df_completo in dados_filtrados.items():
         qtd_itens_total += df_loja['Estoque Atual'].sum()
 
 col1, col2, col3, col4 = st.columns(4)
-col1.metric("💰 Valor Estoque Atual (Venda)", f"R$ {v_estoque_atual_total:,.2f}")
-col2.metric(" Valor Estoque Mínimo (Venda)", f"R$ {v_estoque_min_total:,.2f}")
+col1.metric(" Valor Estoque Atual (Venda)", f"R$ {v_estoque_atual_total:,.2f}")
+col2.metric("📉 Valor Estoque Mínimo (Venda)", f"R$ {v_estoque_min_total:,.2f}")
 col3.metric("⚠️ Capital Preso (Excesso)", f"R$ {v_excesso_total_total:,.2f}", delta=f"{((v_excesso_total_total/v_estoque_atual_total)*100 if v_estoque_atual_total > 0 else 0):.1f}% do estoque", delta_color="inverse")
-col4.metric(" Risco de Ruptura (Falta)", f"R$ {v_falta_total_total:,.2f}", delta="Abaixo do Mínimo", delta_color="off")
+col4.metric("🚨 Risco de Ruptura (Falta)", f"R$ {v_falta_total_total:,.2f}", delta="Abaixo do Mínimo", delta_color="off")
 
 st.markdown("---")
 st.subheader("💵 Análise de Custos (Baseado no Preço Tabela)")
@@ -520,8 +522,8 @@ for nome_marca, df_completo in dados_filtrados.items():
         st.warning(f"Sem registros de movimentação para este PDV na marca {nome_marca}.")
         continue
     
-    # Título da marca com logo
-    st.markdown(f"### {exibir_marca_com_logo(nome_marca, tamanho_logo=25)}")
+    # Título da marca com logo (usando st.columns + st.image)
+    exibir_titulo_marca(nome_marca, tamanho_logo=35)
     
     col_tab1, col_tab2 = st.columns(2)
     with col_tab1:
