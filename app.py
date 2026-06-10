@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
-import urllib.parse
 
 # 1. Configuração Inicial da Página (Visual Dark Mode)
 st.set_page_config(
@@ -25,6 +24,9 @@ st.markdown("""
 # ID OFICIAL DA SUA PLANILHA EXTRAÍDO DO SEU LINK
 SPREADSHEET_ID = "1EDDyKie9UiugMLMowcPzHfViqzziFcSgxVPvZ2Rx3L0"
 
+# URL de exportação direta em formato Excel (Evita completamente erros de quebra de texto do CSV)
+URL_EXCEL = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/export?format=xlsx"
+
 # 2. Dicionário com os seus 17 PDVs reais
 DE_PARA_LOJAS = {
     4842: "4842 - Loja 4842",
@@ -46,58 +48,62 @@ DE_PARA_LOJAS = {
     23379: "23379 - Loja 23379"
 }
 
-# 3. Conexão direta e ultra-veloz via export de API do Google Sheets
+# 3. Conexão direta via engine do Excel
 @st.cache_data(ttl=3600)  # Limpa o cache automaticamente a cada 1 hora
-def carregar_dados_nuvem(sheet_id):
+def carregar_dados_nuvem(url):
     marcas_dict = {}
     abas = {'BOTICARIO': 'O Boticário 🟢', 'EUDORA': 'Eudora 🟣', 'QUEM_DISSE_BERENICE': 'Quem Disse, Berenice? 💖'}
     
-    for aba_excel, nome_exibicao in abas.items():
-        try:
-            # Converte a requisição da aba para formato amigável de URL
-            aba_codificada = urllib.parse.quote(aba_excel)
-            url_csv = f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:csv&sheet={aba_codificada}"
-            
-            # Lê os dados da nuvem instantaneamente via CSV Stream
-            df = pd.read_csv(url_csv)
-            
-            # Garante que colunas críticas sejam tratadas como números
-            df['PDV'] = pd.to_numeric(df['PDV'], errors='coerce')
-            df['Estoque Atual'] = pd.to_numeric(df['Estoque Atual'], errors='coerce').fillna(0)
-            df['Preço tabela'] = pd.to_numeric(df['Preço tabela'], errors='coerce').fillna(0)
-            
-            # Regras de Estoque Mínimo por Curva
-            regras_minimo = {'A': 15, 'B': 10, 'C': 5, 'E': 2}
-            df['Estoque_Minimo_Qtd'] = df['Classe'].map(regras_minimo).fillna(2)
-            
-            # Cálculos Financeiros Dinâmicos
-            df['Valor_Estoque_Atual'] = df['Estoque Atual'] * df['Preço tabela']
-            df['Valor_Estoque_Minimo'] = df['Estoque_Minimo_Qtd'] * df['Preço tabela']
-            
-            df['Qtd_Excesso'] = (df['Estoque Atual'] - df['Estoque_Minimo_Qtd']).clip(lower=0)
-            df['Valor_Excesso'] = df['Qtd_Excesso'] * df['Preço tabela']
-            
-            df['Qtd_Falta'] = (df['Estoque_Minimo_Qtd'] - df['Estoque Atual']).clip(lower=0)
-            df['Valor_Falta'] = df['Qtd_Falta'] * df['Preço tabela']
-            
-            marcas_dict[nome_exibicao] = df
-        except Exception as e:
-            st.error(f"Erro ao ler a aba {aba_excel} na nuvem: {e}")
-            
+    try:
+        # Baixa o arquivo binário completo do Excel direto da nuvem
+        excel_file = pd.ExcelFile(url)
+        
+        for aba_excel, nome_exibicao in abas.items():
+            if aba_excel in excel_file.sheet_names:
+                df = pd.read_excel(excel_file, sheet_name=aba_excel)
+                
+                # Garante que colunas críticas sejam tratadas como números
+                df['PDV'] = pd.to_numeric(df['PDV'], errors='coerce')
+                df['Estoque Atual'] = pd.to_numeric(df['Estoque Atual'], errors='coerce').fillna(0)
+                df['Preço tabela'] = pd.to_numeric(df['Preço tabela'], errors='coerce').fillna(0)
+                
+                # Regras de Estoque Mínimo por Curva
+                regras_minimo = {'A': 15, 'B': 10, 'C': 5, 'E': 2}
+                df['Estoque_Minimo_Qtd'] = df['Classe'].map(regras_minimo).fillna(2)
+                
+                # Cálculos Financeiros Dinâmicos
+                df['Valor_Estoque_Atual'] = df['Estoque Atual'] * df['Preço tabela']
+                df['Valor_Estoque_Minimo'] = df['Estoque_Minimo_Qtd'] * df['Preço tabela']
+                
+                df['Qtd_Excesso'] = (df['Estoque Atual'] - df['Estoque_Minimo_Qtd']).clip(lower=0)
+                df['Valor_Excesso'] = df['Qtd_Excesso'] * df['Preço tabela']
+                
+                df['Qtd_Falta'] = (df['Estoque_Minimo_Qtd'] - df['Estoque Atual']).clip(lower=0)
+                df['Valor_Falta'] = df['Qtd_Falta'] * df['Preço tabela']
+                
+                marcas_dict[nome_exibicao] = df
+            else:
+                st.error(f"Aba {aba_excel} não encontrada no arquivo do Drive.")
+    except Exception as e:
+        st.error(f"Erro ao conectar ou ler o arquivo do Google Drive: {e}")
+        
     return marcas_dict
 
 # Carregamento dos dados
-with st.spinner("Conectando ao Google Drive e atualizando estoques..."):
-    dados_marcas = carregar_dados_nuvem(SPREADSHEET_ID)
+with st.spinner("Conectando ao Google Drive e processando bases..."):
+    dados_marcas = carregar_dados_nuvem(URL_EXCEL)
 
 if not dados_marcas:
-    st.error("Não foi possível carregar nenhuma aba. Verifique se a planilha está compartilhada como 'Qualquer pessoa com o link pode ler'.")
+    st.error("Nenhum dado foi carregado. Verifique as permissões de compartilhamento da planilha.")
     st.stop()
 
 # 4. Barra Lateral - Filtros
 st.sidebar.title("Filtros de Visão")
 primeira_marca = list(dados_marcas.keys())[0]
-todos_pdvs = sorted([int(x) for x in dados_marcas[primeira_marca]['PDV'].dropna().unique()])
+
+# Extração limpa e segura dos códigos de PDV únicos
+df_pdvs = dados_marcas[primeira_marca]['PDV'].dropna()
+todos_pdvs = sorted(df_pdvs.unique().astype(int))
 opcoes_selectbox = [DE_PARA_LOJAS.get(pdv, f"PDV {pdv}") for pdv in todos_pdvs]
 
 loja_selecionada_nome = st.sidebar.selectbox("Selecione a Loja / PDV:", opcoes_selectbox)
