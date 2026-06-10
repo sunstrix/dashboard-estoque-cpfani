@@ -93,6 +93,13 @@ NOMES_MARCAS = {
     'QUEM_DISSE_BERENICE': 'Quem Disse, Berenice?'
 }
 
+# Mapeamento das abas da planilha de segurança para as marcas
+ABAS_SEGURANCA = {
+    'BOT': 'O Boticário',
+    'EUD': 'Eudora',
+    'QDB': 'Quem Disse, Berenice?'
+}
+
 # Logos das marcas (arquivos PNG no repositório)
 LOGOS_MARCAS = {
     'O Boticário': 'logo_boticario.png',
@@ -136,8 +143,8 @@ def obter_horario_brasilia():
 
 def carregar_estoque_seguranca(url):
     """
-    Carrega a planilha de estoque de segurança e retorna um DataFrame
-    com as colunas: PDV, SKU, ESTOQUE DE SEGURANCA
+    Carrega a planilha de estoque de segurança de TODAS as abas (BOT, EUD, QDB)
+    e retorna um DataFrame consolidado com as colunas: PDV, SKU, ESTOQUE_DE_SEGURANCA
     
     Se o campo estiver em branco, considera como 0.
     """
@@ -145,57 +152,91 @@ def carregar_estoque_seguranca(url):
         # Baixa o arquivo Excel da planilha de estoque de segurança
         excel_file = pd.ExcelFile(url)
         
-        # Tenta carregar da primeira aba disponível ou procura por nomes comuns
-        aba_encontrada = None
-        for aba_nome in excel_file.sheet_names:
-            if aba_nome.upper() in ['ESTOQUE_SEGURANCA', 'ESTOQUE_DE_SEGURANCA', 'SEGURANCA', 'MINIMOS', 'PDV', 'DADOS']:
-                aba_encontrada = aba_nome
-                break
+        # Lista de abas esperadas
+        abas_esperadas = ['BOT', 'EUD', 'QDB']
+        abas_disponiveis = [aba.upper() for aba in excel_file.sheet_names]
         
-        # Se não encontrou aba específica, usa a primeira
-        if aba_encontrada is None:
-            aba_encontrada = excel_file.sheet_names[0]
+        # Verifica quais abas estão disponíveis
+        abas_encontradas = [aba for aba in abas_esperadas if aba in abas_disponiveis]
         
-        df_seguranca = pd.read_excel(excel_file, sheet_name=aba_encontrada)
-        
-        # Normaliza nomes das colunas (remove espaços extras, converte para maiúsculo)
-        df_seguranca.columns = [col.strip().upper() for col in df_seguranca.columns]
-        
-        # Verifica se as colunas necessárias existem
-        colunas_necessarias = ['PDV', 'SKU']
-        colunas_faltantes = [col for col in colunas_necessarias if col not in df_seguranca.columns]
-        
-        if colunas_faltantes:
-            st.warning(f"⚠️ Colunas faltantes na planilha de estoque de segurança: {', '.join(colunas_faltantes)}")
+        if not abas_encontradas:
+            st.warning(f"⚠️ Nenhuma das abas esperadas ({', '.join(abas_esperadas)}) foi encontrada na planilha de estoque de segurança.")
+            st.info(f"Abas disponíveis: {', '.join(excel_file.sheet_names)}")
             return pd.DataFrame()
         
-        # Identifica a coluna de estoque de segurança (pode ter vários nomes)
-        colunas_possiveis = ['ESTOQUE DE SEGURANCA', 'ESTOQUE_DE_SEGURANCA', 'ESTOQUE_SEGURANCA', 
-                           'ESTOQUE MINIMO', 'ESTOQUE_MINIMO', 'MINIMO', 'SEGURANCA']
-        coluna_seguranca = None
+        # Lista para armazenar DataFrames de cada aba
+        dfs_abas = []
         
-        for col in colunas_possiveis:
-            if col in df_seguranca.columns:
-                coluna_seguranca = col
-                break
+        # Carrega cada aba encontrada
+        for aba_nome in abas_encontradas:
+            try:
+                # Encontra o nome exato da aba (case-insensitive)
+                aba_exata = [nome for nome in excel_file.sheet_names if nome.upper() == aba_nome][0]
+                
+                df_abas = pd.read_excel(excel_file, sheet_name=aba_exata)
+                
+                if df_abas.empty:
+                    st.info(f"ℹ️ A aba {aba_nome} está vazia.")
+                    continue
+                
+                # Normaliza nomes das colunas (remove espaços extras, converte para maiúsculo)
+                df_abas.columns = [col.strip().upper() for col in df_abas.columns]
+                
+                # Verifica se as colunas necessárias existem
+                colunas_necessarias = ['PDV', 'SKU']
+                colunas_faltantes = [col for col in colunas_necessarias if col not in df_abas.columns]
+                
+                if colunas_faltantes:
+                    st.warning(f"⚠️ Colunas faltantes na aba {aba_nome}: {', '.join(colunas_faltantes)}")
+                    continue
+                
+                # Identifica a coluna de estoque de segurança (pode ter vários nomes)
+                colunas_possiveis = ['ESTOQUE DE SEGURANCA', 'ESTOQUE_DE_SEGURANCA', 'ESTOQUE_SEGURANCA', 
+                                   'ESTOQUE MINIMO', 'ESTOQUE_MINIMO', 'MINIMO', 'SEGURANCA', 'QTD_MINIMA']
+                coluna_seguranca = None
+                
+                for col in colunas_possiveis:
+                    if col in df_abas.columns:
+                        coluna_seguranca = col
+                        break
+                
+                if coluna_seguranca is None:
+                    st.warning(f"⚠️ Coluna de estoque de segurança não encontrada na aba {aba_nome}. Usando valor padrão 0.")
+                    df_abas['ESTOQUE_DE_SEGURANCA'] = 0
+                else:
+                    # Renomeia para padronizar
+                    df_abas = df_abas.rename(columns={coluna_seguranca: 'ESTOQUE_DE_SEGURANCA'})
+                    # Converte para numérico e preenche vazios com 0
+                    df_abas['ESTOQUE_DE_SEGURANCA'] = pd.to_numeric(df_abas['ESTOQUE_DE_SEGURANCA'], errors='coerce').fillna(0)
+                
+                # Garante que PDV e SKU sejam numéricos/texto corretamente
+                df_abas['PDV'] = pd.to_numeric(df_abas['PDV'], errors='coerce')
+                df_abas['SKU'] = df_abas['SKU'].astype(str).str.strip()
+                
+                # Adiciona coluna de marca para referência (opcional)
+                marca_correspondente = ABAS_SEGURANCA.get(aba_nome, aba_nome)
+                df_abas['MARCA_REFERENCIA'] = marca_correspondente
+                
+                # Mantém apenas as colunas necessárias
+                df_abas = df_abas[['PDV', 'SKU', 'ESTOQUE_DE_SEGURANCA', 'MARCA_REFERENCIA']].copy()
+                
+                dfs_abas.append(df_abas)
+                
+            except Exception as e:
+                st.error(f"❌ Erro ao processar aba {aba_nome}: {str(e)}")
+                continue
         
-        if coluna_seguranca is None:
-            st.warning("⚠️ Coluna de estoque de segurança não encontrada na planilha. Usando valor padrão 0.")
-            df_seguranca['ESTOQUE_DE_SEGURANCA'] = 0
+        # Concatena todos os DataFrames das abas
+        if dfs_abas:
+            df_consolidado = pd.concat(dfs_abas, ignore_index=True)
+            
+            st.success(f"✅ Estoque de segurança carregado com sucesso!")
+            st.info(f"📊 Total de registros: {len(df_consolidado)} | Abas processadas: {', '.join(abas_encontradas)}")
+            
+            return df_consolidado
         else:
-            # Renomeia para padronizar
-            df_seguranca = df_seguranca.rename(columns={coluna_seguranca: 'ESTOQUE_DE_SEGURANCA'})
-            # Converte para numérico e preenche vazios com 0
-            df_seguranca['ESTOQUE_DE_SEGURANCA'] = pd.to_numeric(df_seguranca['ESTOQUE_DE_SEGURANCA'], errors='coerce').fillna(0)
-        
-        # Garante que PDV e SKU sejam numéricos/texto corretamente
-        df_seguranca['PDV'] = pd.to_numeric(df_seguranca['PDV'], errors='coerce')
-        df_seguranca['SKU'] = df_seguranca['SKU'].astype(str).str.strip()
-        
-        # Mantém apenas as colunas necessárias
-        df_seguranca = df_seguranca[['PDV', 'SKU', 'ESTOQUE_DE_SEGURANCA']].copy()
-        
-        return df_seguranca
+            st.warning("⚠️ Nenhum dado válido foi encontrado nas abas da planilha de estoque de segurança.")
+            return pd.DataFrame()
         
     except Exception as e:
         st.error(f"❌ Erro ao carregar planilha de estoque de segurança: {str(e)}")
@@ -242,7 +283,7 @@ def carregar_dados_nuvem(url_principal, url_seguranca):
     data_atualizacao = None
     
     try:
-        # Carrega a planilha de estoque de segurança
+        # Carrega a planilha de estoque de segurança (TODAS as abas)
         df_estoque_seguranca = carregar_estoque_seguranca(url_seguranca)
         
         if df_estoque_seguranca.empty:
@@ -274,11 +315,26 @@ def carregar_dados_nuvem(url_principal, url_seguranca):
                 
                 # MERGE com a planilha de estoque de segurança
                 if not df_estoque_seguranca.empty:
-                    df = df.merge(df_estoque_seguranca, on=['PDV', 'SKU'], how='left')
-                    # Se não encontrou no merge, usa 0
-                    df['Estoque_Minimo_Qtd'] = df['ESTOQUE_DE_SEGURANCA'].fillna(0)
-                    # Remove a coluna temporária
-                    df = df.drop(columns=['ESTOQUE_DE_SEGURANCA'])
+                    # Filtra apenas os dados da marca correspondente
+                    df_seguranca_marca = df_estoque_seguranca[
+                        df_estoque_seguranca['MARCA_REFERENCIA'] == nome_exibicao
+                    ].copy()
+                    
+                    if not df_seguranca_marca.empty:
+                        df = df.merge(
+                            df_seguranca_marca[['PDV', 'SKU', 'ESTOQUE_DE_SEGURANCA']], 
+                            on=['PDV', 'SKU'], 
+                            how='left'
+                        )
+                        # Se não encontrou no merge, usa 0
+                        df['Estoque_Minimo_Qtd'] = df['ESTOQUE_DE_SEGURANCA'].fillna(0)
+                        # Remove a coluna temporária
+                        df = df.drop(columns=['ESTOQUE_DE_SEGURANCA'])
+                    else:
+                        st.warning(f"⚠️ Nenhum dado de estoque de segurança encontrado para a marca {nome_exibicao}")
+                        # Usa regras padrão se não houver dados
+                        regras_minimo = {'A': 15, 'B': 10, 'C': 5, 'E': 2}
+                        df['Estoque_Minimo_Qtd'] = df['Classe'].map(regras_minimo).fillna(2)
                 else:
                     # Se não tem planilha de segurança, usa regras padrão
                     regras_minimo = {'A': 15, 'B': 10, 'C': 5, 'E': 2}
