@@ -20,7 +20,7 @@ st.markdown("""
     .stTabs [data-baseweb="tab"] { color: #a3b8cc; font-size: 16px; }
     .stTabs [data-baseweb="tab"][aria-selected="true"] { color: #00f2fe; font-weight: bold; }
     </style>
-""", unsafe_allowed_html=True)
+""", unsafe_allow_html=True)
 
 # SEU LINK OFICIAL CONFIGURADO AQUI:
 URL_PLANILHA = "https://docs.google.com/spreadsheets/d/1EDDyKie9UiugMLMowcPzHfViqzziFcSgxVPvZ2Rx3L0/edit?usp=sharing"
