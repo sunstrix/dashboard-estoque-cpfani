@@ -62,10 +62,12 @@ st.markdown("""
 # IDs OFICIAIS DAS PLANILHAS
 SPREADSHEET_ID_PRINCIPAL = "1EDDyKie9UiugMLMowcPzHfViqzziFcSgxVPvZ2Rx3L0"
 SPREADSHEET_ID_SEGURANCA = "1uHonFnFM4p7bz4s7YpewhKHNs6fSEfw9rDMTKC7jtHE"
+SPREADSHEET_ID_DRAFT = "11Z21gFvJ9pm2xSlF3IweC7xcYZwAZWrjcWDnRe5LexY"
 
 # URLs de exportação direta em formato Excel
 URL_EXCEL = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID_PRINCIPAL}/export?format=xlsx"
 URL_ESTOQUE_SEGURANCA = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID_SEGURANCA}/export?format=xlsx"
+URL_DRAFT = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID_DRAFT}/export?format=xlsx"
 
 # 2. Dicionário com os 17 PDVs reais (Nomes atualizados)
 DE_PARA_LOJAS = {
@@ -87,6 +89,30 @@ DE_PARA_LOJAS = {
     23000: "23000 - Outlet",
     23379: "23379 - Assai Piraporinha"
 }
+
+# Mapeamento dos nomes completos da planilha DRAFT para os códigos de PDV
+MAPEAMENTO_PDV_DRAFT = {
+    'Loja: 4842 - N. S. F. COSMETICOS E PRESENTES LTDA': 4842,
+    'Loja: 5152 - N. S. F. COSMETICOS E PRESENTES LTDA': 5152,
+    'Loja: 6105 - N. S. F. COSMETICOS E PRESENTES LTDA': 6105,
+    'Loja: 6106 - N. S. F. COSMETICOS E PRESENTES LTDA': 6106,
+    'Loja: 6110 - N. S. F. COSMETICOS E PRESENTES LTDA': 6110,
+    'Loja: 8001 - N. S. F. COSMETICOS E PRESENTES LTDA': 8001,
+    'Loja: 11576 - N. S. F. COSMETICOS E PRESENTES LTDA': 11576,
+    'Loja: 12055 - N. S. F. COSMETICOS E PRESENTES LTDA': 12055,
+    'Loja: 12056 - S. P. ARON COSMETICOS EPP': 12056,
+    'Loja: 12605 - N.S.F. COSMETICOS E PRESENTES LTDA.': 12605,
+    'Loja: 12645 - N. S. F. COSMETICOS E PRESENTES LTDA': 12645,
+    'Loja: 14120 - ARPEL DISTRIBUIDORA DE COSMETICOS LTDA - EPP': 14120,
+    'Loja: 14353 - ARPEL DISTRIBUIDORA DE COSMETICOS LTDA - EPP': 14353,
+    'Loja: 20371 - N. S. F. COSMÉTICOS E PRESENTES LTDA.': 20371,
+    'Loja: 21502 - N. S. F. COSMETICOS E PRESENTES LTD': 21502,
+    'Loja: 23000 - N. S. F. COSMETICOS E PRESENTES LTD': 23000,
+    'Loja: 23379 - N. S. F. COSMETICOS E PRESENTES LTD': 23379
+}
+
+# Mapeamento reverso (código -> nome draft) para facilitar busca
+MAPEAMENTO_PDV_DRAFT_REVERSO = {v: k for k, v in MAPEAMENTO_PDV_DRAFT.items()}
 
 # Nomes limpos das marcas (sem emojis) - usados como chaves internas
 NOMES_MARCAS = {
@@ -188,58 +214,131 @@ def obter_horario_brasilia():
     agora_brasilia = datetime.now(fuso_brasilia)
     return agora_brasilia.strftime("%d/%m/%Y às %H:%M:%S")
 
+def carregar_planilha_draft(url):
+    """
+    Carrega a planilha DRAFT e retorna um DataFrame com:
+    - PDV (código numérico)
+    - SKU
+    - CUSTO (coluna J ou similar)
+    
+    Mapeia os nomes completos de loja para os códigos de PDV.
+    """
+    excel_buffer = download_arquivo_excel_com_retry(url, "planilha draft de custos", timeout=90)
+    
+    if excel_buffer is None:
+        return pd.DataFrame()
+    
+    try:
+        excel_file = pd.ExcelFile(excel_buffer)
+        
+        # Usa a primeira aba disponível
+        if not excel_file.sheet_names:
+            return pd.DataFrame()
+        
+        df_draft = pd.read_excel(excel_file, sheet_name=excel_file.sheet_names[0])
+        
+        if df_draft.empty:
+            return pd.DataFrame()
+        
+        # Normaliza nomes das colunas
+        df_draft.columns = [str(col).strip().upper() for col in df_draft.columns]
+        
+        # Identifica as colunas necessárias
+        # Coluna de Loja/PDV (pode ter vários nomes)
+        colunas_loja_possiveis = ['LOJA', 'PDV', 'LOJA/PDV', 'LOJA - PDV', 'CÓDIGO LOJA', 'CODIGO LOJA']
+        coluna_loja = None
+        for col in colunas_loja_possiveis:
+            if col in df_draft.columns:
+                coluna_loja = col
+                break
+        
+        # Coluna de SKU
+        colunas_sku_possiveis = ['SKU', 'CÓDIGO', 'CODIGO', 'CÓDIGO SKU', 'CODIGO SKU', 'CÓD. SKU']
+        coluna_sku = None
+        for col in colunas_sku_possiveis:
+            if col in df_draft.columns:
+                coluna_sku = col
+                break
+        
+        # Coluna de Custo (coluna J geralmente)
+        colunas_custo_possiveis = ['CUSTO', 'PREÇO DE CUSTO', 'PRECO DE CUSTO', 'CUSTO UNITÁRIO', 
+                                   'CUSTO UNITARIO', 'VALOR CUSTO', 'CUSTO (R$)', 'CUSTO R$']
+        coluna_custo = None
+        for col in colunas_custo_possiveis:
+            if col in df_draft.columns:
+                coluna_custo = col
+                break
+        
+        # Se não encontrou coluna de custo, tenta pela posição (coluna J = índice 9)
+        if coluna_custo is None and len(df_draft.columns) > 9:
+            coluna_custo = df_draft.columns[9]  # Coluna J (0-indexed = 9)
+        
+        # Se ainda não encontrou, usa a 10ª coluna por padrão
+        if coluna_custo is None and len(df_draft.columns) >= 10:
+            coluna_custo = df_draft.columns[9]
+        
+        if coluna_loja is None or coluna_sku is None or coluna_custo is None:
+            return pd.DataFrame()
+        
+        # Prepara o DataFrame
+        df_resultado = pd.DataFrame()
+        df_resultado['LOJA_NOME'] = df_draft[coluna_loja].astype(str).str.strip()
+        df_resultado['SKU'] = df_draft[coluna_sku].astype(str).str.strip()
+        df_resultado['CUSTO_DRAFT'] = pd.to_numeric(df_draft[coluna_custo], errors='coerce').fillna(0)
+        
+        # Mapeia nomes de loja para códigos de PDV
+        df_resultado['PDV'] = df_resultado['LOJA_NOME'].map(MAPEAMENTO_PDV_DRAFT)
+        
+        # Remove linhas sem PDV válido
+        df_resultado = df_resultado[df_resultado['PDV'].notna()].copy()
+        df_resultado['PDV'] = df_resultado['PDV'].astype(int)
+        
+        # Mantém apenas colunas necessárias
+        df_resultado = df_resultado[['PDV', 'SKU', 'CUSTO_DRAFT']].copy()
+        
+        return df_resultado
+        
+    except Exception:
+        return pd.DataFrame()
+
 def carregar_estoque_seguranca(url):
     """
     Carrega a planilha de estoque de segurança de TODAS as abas (BOT, EUD, QDB)
     e retorna um DataFrame consolidado com as colunas: PDV, SKU, ESTOQUE_DE_SEGURANCA
-    
-    Se o campo estiver em branco, considera como 0.
     """
-    # Faz download com retry
     excel_buffer = download_arquivo_excel_com_retry(url, "planilha de estoque de segurança", timeout=90)
     
     if excel_buffer is None:
         return pd.DataFrame()
     
     try:
-        # Carrega o Excel
         excel_file = pd.ExcelFile(excel_buffer)
         
-        # Lista de abas esperadas
         abas_esperadas = ['BOT', 'EUD', 'QDB']
         abas_disponiveis = [aba.upper() for aba in excel_file.sheet_names]
-        
-        # Verifica quais abas estão disponíveis
         abas_encontradas = [aba for aba in abas_esperadas if aba in abas_disponiveis]
         
         if not abas_encontradas:
             return pd.DataFrame()
         
-        # Lista para armazenar DataFrames de cada aba
         dfs_abas = []
         
-        # Carrega cada aba encontrada
         for aba_nome in abas_encontradas:
             try:
-                # Encontra o nome exato da aba (case-insensitive)
                 aba_exata = [nome for nome in excel_file.sheet_names if nome.upper() == aba_nome][0]
-                
                 df_abas = pd.read_excel(excel_file, sheet_name=aba_exata)
                 
                 if df_abas.empty:
                     continue
                 
-                # Normaliza nomes das colunas (remove espaços extras, converte para maiúsculo)
                 df_abas.columns = [col.strip().upper() for col in df_abas.columns]
                 
-                # Verifica se as colunas necessárias existem
                 colunas_necessarias = ['PDV', 'SKU']
                 colunas_faltantes = [col for col in colunas_necessarias if col not in df_abas.columns]
                 
                 if colunas_faltantes:
                     continue
                 
-                # Identifica a coluna de estoque de segurança (pode ter vários nomes)
                 colunas_possiveis = ['ESTOQUE DE SEGURANCA', 'ESTOQUE_DE_SEGURANCA', 'ESTOQUE_SEGURANCA', 
                                    'ESTOQUE MINIMO', 'ESTOQUE_MINIMO', 'MINIMO', 'SEGURANCA', 'QTD_MINIMA']
                 coluna_seguranca = None
@@ -252,31 +351,23 @@ def carregar_estoque_seguranca(url):
                 if coluna_seguranca is None:
                     df_abas['ESTOQUE_DE_SEGURANCA'] = 0
                 else:
-                    # Renomeia para padronizar
                     df_abas = df_abas.rename(columns={coluna_seguranca: 'ESTOQUE_DE_SEGURANCA'})
-                    # Converte para numérico e preenche vazios com 0
                     df_abas['ESTOQUE_DE_SEGURANCA'] = pd.to_numeric(df_abas['ESTOQUE_DE_SEGURANCA'], errors='coerce').fillna(0)
                 
-                # Garante que PDV e SKU sejam numéricos/texto corretamente
                 df_abas['PDV'] = pd.to_numeric(df_abas['PDV'], errors='coerce')
                 df_abas['SKU'] = df_abas['SKU'].astype(str).str.strip()
                 
-                # Adiciona coluna de marca para referência (opcional)
                 marca_correspondente = ABAS_SEGURANCA.get(aba_nome, aba_nome)
                 df_abas['MARCA_REFERENCIA'] = marca_correspondente
                 
-                # Mantém apenas as colunas necessárias
                 df_abas = df_abas[['PDV', 'SKU', 'ESTOQUE_DE_SEGURANCA', 'MARCA_REFERENCIA']].copy()
-                
                 dfs_abas.append(df_abas)
                 
             except Exception:
                 continue
         
-        # Concatena todos os DataFrames das abas
         if dfs_abas:
-            df_consolidado = pd.concat(dfs_abas, ignore_index=True)
-            return df_consolidado
+            return pd.concat(dfs_abas, ignore_index=True)
         else:
             return pd.DataFrame()
         
@@ -293,14 +384,11 @@ def obter_data_atualizacao_planilha(url_excel):
         return None
     
     try:
-        # Carrega o workbook
         workbook = openpyxl.load_workbook(excel_buffer, read_only=True, data_only=True)
         
-        # Procura em todas as abas
         for sheet_name in workbook.sheetnames:
             sheet = workbook[sheet_name]
             
-            # Procura células com nomes específicos
             for row in sheet.iter_rows(min_row=1, max_row=10, max_col=5):
                 for cell in row:
                     if cell.value:
@@ -320,13 +408,14 @@ def obter_data_atualizacao_planilha(url_excel):
 
 # 3. Conexão direta via engine do Excel (Otimizado para planilhas públicas)
 @st.cache_data(ttl=3600)  # Limpa o cache automaticamente a cada 1 hora
-def carregar_dados_nuvem(url_principal, url_seguranca):
+def carregar_dados_nuvem(url_principal, url_seguranca, url_draft):
     dicionario_marcas = {}
     data_atualizacao = None
     
     try:
-        # Carrega a planilha de estoque de segurança (TODAS as abas)
+        # Carrega as planilhas auxiliares
         df_estoque_seguranca = carregar_estoque_seguranca(url_seguranca)
+        df_draft = carregar_planilha_draft(url_draft)
         
         # Tenta obter a data de atualização da planilha
         data_atualizacao = obter_data_atualizacao_planilha(url_principal)
@@ -355,12 +444,57 @@ def carregar_dados_nuvem(url_principal, url_seguranca):
                     # Converte SKU para string para merge correto
                     df['SKU'] = df['SKU'].astype(str).str.strip()
                     
-                    # UTILIZA PREÇO TABELA COMO BASE PARA CUSTO
-                    df['Preço de Custo'] = df['Preço tabela']
+                    # ==========================================
+                    # REGRA DE CUSTO COM PLANILHA DRAFT
+                    # ==========================================
+                    # 1. Se não tiver preço tabela → usa custo da draft
+                    # 2. Se tiver ambos → usa o MAIOR valor
+                    
+                    df['Custo_Draft_Original'] = 0.0
+                    
+                    if not df_draft.empty:
+                        # Filtra draft apenas para esta marca (se houver referência)
+                        df_draft_merge = df_draft[['PDV', 'SKU', 'CUSTO_DRAFT']].copy()
+                        
+                        # Merge com a planilha draft
+                        df = df.merge(
+                            df_draft_merge,
+                            on=['PDV', 'SKU'],
+                            how='left'
+                        )
+                        
+                        # Preenche NaN com 0
+                        df['CUSTO_DRAFT'] = df['CUSTO_DRAFT'].fillna(0)
+                        df['Custo_Draft_Original'] = df['CUSTO_DRAFT']
+                        
+                        # APLICA A REGRA DE CUSTO:
+                        # - Se preço tabela = 0 ou vazio → usa CUSTO_DRAFT
+                        # - Se ambos têm valor → usa o MAIOR
+                        def calcular_custo_final(row):
+                            preco_tabela = row['Preço tabela']
+                            custo_draft = row['CUSTO_DRAFT']
+                            
+                            # Se não tem preço tabela, usa custo draft
+                            if preco_tabela == 0 or pd.isna(preco_tabela):
+                                return custo_draft
+                            
+                            # Se tem ambos, usa o maior
+                            if custo_draft > 0:
+                                return max(preco_tabela, custo_draft)
+                            
+                            # Se só tem preço tabela, usa ele
+                            return preco_tabela
+                        
+                        df['Preço de Custo'] = df.apply(calcular_custo_final, axis=1)
+                        
+                        # Remove coluna temporária
+                        df = df.drop(columns=['CUSTO_DRAFT'])
+                    else:
+                        # Se não tem draft, usa preço tabela como custo
+                        df['Preço de Custo'] = df['Preço tabela']
                     
                     # MERGE com a planilha de estoque de segurança
                     if not df_estoque_seguranca.empty:
-                        # Filtra apenas os dados da marca correspondente
                         df_seguranca_marca = df_estoque_seguranca[
                             df_estoque_seguranca['MARCA_REFERENCIA'] == nome_exibicao
                         ].copy()
@@ -371,20 +505,16 @@ def carregar_dados_nuvem(url_principal, url_seguranca):
                                 on=['PDV', 'SKU'], 
                                 how='left'
                             )
-                            # Se não encontrou no merge, usa 0
                             df['Estoque_Minimo_Qtd'] = df['ESTOQUE_DE_SEGURANCA'].fillna(0)
-                            # Remove a coluna temporária
                             df = df.drop(columns=['ESTOQUE_DE_SEGURANCA'])
                         else:
-                            # Usa regras padrão se não houver dados
                             regras_minimo = {'A': 15, 'B': 10, 'C': 5, 'E': 2}
                             df['Estoque_Minimo_Qtd'] = df['Classe'].map(regras_minimo).fillna(2)
                     else:
-                        # Se não tem planilha de segurança, usa regras padrão
                         regras_minimo = {'A': 15, 'B': 10, 'C': 5, 'E': 2}
                         df['Estoque_Minimo_Qtd'] = df['Classe'].map(regras_minimo).fillna(2)
                     
-                    # Cálculos Financeiros Dinâmicos - Preço de Venda
+                    # Cálculos Financeiros Dinâmicos - Preço de Venda (Tabela)
                     df['Valor_Estoque_Atual'] = df['Estoque Atual'] * df['Preço tabela']
                     df['Valor_Estoque_Minimo'] = df['Estoque_Minimo_Qtd'] * df['Preço tabela']
                     
@@ -394,7 +524,7 @@ def carregar_dados_nuvem(url_principal, url_seguranca):
                     df['Qtd_Falta'] = (df['Estoque_Minimo_Qtd'] - df['Estoque Atual']).clip(lower=0)
                     df['Valor_Falta'] = df['Qtd_Falta'] * df['Preço tabela']
                     
-                    # CÁLCULOS DE CUSTO - Baseado no Preço Tabela
+                    # CÁLCULOS DE CUSTO - Baseado no Preço de Custo (que pode vir da draft)
                     df['Valor_Custo_Estoque_Atual'] = df['Estoque Atual'] * df['Preço de Custo']
                     df['Valor_Custo_Estoque_Minimo'] = df['Estoque_Minimo_Qtd'] * df['Preço de Custo']
                     
@@ -410,7 +540,7 @@ def carregar_dados_nuvem(url_principal, url_seguranca):
 
 # Carregamento dos dados e captura do horário de Brasília
 with st.spinner("Carregando dados..."):
-    dados_marcas, data_atualizacao_planilha = carregar_dados_nuvem(URL_EXCEL, URL_ESTOQUE_SEGURANCA)
+    dados_marcas, data_atualizacao_planilha = carregar_dados_nuvem(URL_EXCEL, URL_ESTOQUE_SEGURANCA, URL_DRAFT)
     horario_carregamento = obter_horario_brasilia()
 
 if not dados_marcas:
@@ -456,7 +586,7 @@ pdv_selecionado = int(loja_selecionada_nome.split(" - ")[0])
 
 st.sidebar.markdown("---")
 
-# Filtro de Marca (apenas nomes, sem HTML - Streamlit não renderiza HTML em selectbox)
+# Filtro de Marca
 st.sidebar.subheader("Filtro de Marca")
 opcoes_marca = ["Todas as Marcas"] + list(dados_marcas.keys())
 marca_selecionada = st.sidebar.selectbox("Selecione a Marca:", opcoes_marca)
@@ -526,7 +656,6 @@ if marca_selecionada == "Todas as Marcas":
     st.markdown("---")
     st.subheader("📊 Comparativo entre Marcas")
     
-    # Prepara dados para o gráfico
     dados_grafico = []
     for nome_marca, df_completo in dados_marcas.items():
         df_loja = df_completo[df_completo['PDV'] == pdv_selecionado]
@@ -577,7 +706,7 @@ if marca_selecionada == "Todas as Marcas":
                 plot_bgcolor='rgba(0,0,0,0)',
                 paper_bgcolor='rgba(0,0,0,0)',
                 height=400,
-                title='Custo Total por Marca',
+                title='Custo Total por Marca (Draft + Tabela)',
                 yaxis_title='Valor (R$)'
             )
             st.plotly_chart(fig_custo_marcas, use_container_width=True)
@@ -603,7 +732,6 @@ for nome_marca, df_completo in dados_filtrados.items():
 
 if not df_curva_consolidado.empty:
     if marca_selecionada == "Todas as Marcas":
-        # Mostra tabela consolidada com marca
         df_pivot = df_curva_consolidado.pivot_table(
             values='Custo Total', 
             index='Curva', 
@@ -612,29 +740,24 @@ if not df_curva_consolidado.empty:
             fill_value=0
         ).reset_index()
         
-        # Adiciona coluna de total geral (soma de todas as marcas por curva)
         colunas_marcas = [col for col in df_pivot.columns if col != 'Curva']
         df_pivot['Total Geral'] = df_pivot[colunas_marcas].sum(axis=1)
         
-        # Adiciona linha de total por marca (soma de todas as curvas)
         linha_total = {'Curva': 'TOTAL'}
         for col in colunas_marcas:
             linha_total[col] = df_pivot[col].sum()
         linha_total['Total Geral'] = df_pivot['Total Geral'].sum()
         df_pivot = pd.concat([df_pivot, pd.DataFrame([linha_total])], ignore_index=True)
         
-        # Formata valores monetários
         colunas_valor = [col for col in df_pivot.columns if col != 'Curva']
         for col in colunas_valor:
             df_pivot[col] = df_pivot[col].apply(lambda x: f"R$ {x:,.2f}")
         
         st.dataframe(df_pivot, use_container_width=True, hide_index=True)
     else:
-        # Mostra apenas a marca selecionada
         df_exibicao = df_curva_consolidado[['Curva', 'Custo Total', 'Qtd SKUs']].copy()
         df_exibicao = df_exibicao.sort_values('Curva')
         
-        # Adiciona linha de total
         total_custo = df_exibicao['Custo Total'].sum()
         total_skus = df_exibicao['Qtd SKUs'].sum()
         df_total = pd.DataFrame([{'Curva': 'TOTAL', 'Custo Total': total_custo, 'Qtd SKUs': total_skus}])
@@ -643,11 +766,9 @@ if not df_curva_consolidado.empty:
         df_exibicao['Custo Total'] = df_exibicao['Custo Total'].apply(lambda x: f"R$ {x:,.2f}")
         st.dataframe(df_exibicao, use_container_width=True, hide_index=True)
     
-    # Gráfico de custo por curva
     fig_custo = go.Figure()
     
     if marca_selecionada == "Todas as Marcas":
-        # Gráfico empilhado por marca
         for nome_marca in dados_filtrados.keys():
             df_marca_curva = df_curva_consolidado[df_curva_consolidado['Marca'] == nome_marca]
             if not df_marca_curva.empty:
@@ -659,7 +780,6 @@ if not df_curva_consolidado.empty:
                 ))
         fig_custo.update_layout(barmode='stack')
     else:
-        # Gráfico simples
         fig_custo.add_trace(go.Bar(
             x=df_curva_consolidado['Curva'], 
             y=df_curva_consolidado['Custo Total'], 
@@ -696,7 +816,6 @@ for nome_marca, df_completo in dados_filtrados.items():
 
 if not df_categoria_consolidado.empty:
     if marca_selecionada == "Todas as Marcas":
-        # Gráfico comparativo por categoria e marca
         fig_categoria = go.Figure()
         for nome_marca in dados_filtrados.keys():
             df_marca_cat = df_categoria_consolidado[df_categoria_consolidado['Marca'] == nome_marca]
@@ -709,7 +828,6 @@ if not df_categoria_consolidado.empty:
                 ))
         fig_categoria.update_layout(barmode='group')
     else:
-        # Gráfico simples
         fig_categoria = go.Figure()
         fig_categoria.add_trace(go.Bar(
             x=df_categoria_consolidado['Categoria'], 
@@ -747,28 +865,34 @@ for nome_marca, df_completo in dados_filtrados.items():
     if df_loja.empty:
         continue
     
-    # Título da marca com logo (usando st.columns + st.image)
     exibir_titulo_marca(nome_marca, tamanho_logo=35)
     
     col_tab1, col_tab2 = st.columns(2)
     with col_tab1:
         st.write("### 🛑 Excessos Críticos")
         
-        # FILTRO IMPORTANTE: Exclui SKUs com estoque de segurança = 0
         df_excesso_tabela = df_loja[
             (df_loja['Valor_Excesso'] > 0) & 
             (df_loja['Estoque_Minimo_Qtd'] > 0)
         ][
-            ['SKU', 'Descrição', 'Classe', 'Estoque Atual', 'Estoque_Minimo_Qtd', 'Qtd_Excesso', 'Preço tabela', 'Valor_Excesso']
+            ['SKU', 'Descrição', 'Classe', 'Estoque Atual', 'Estoque_Minimo_Qtd', 'Qtd_Excesso', 'Preço tabela', 'Preço de Custo', 'Valor_Excesso']
         ].sort_values(by='Valor_Excesso', ascending=False)
         
-        st.dataframe(df_excesso_tabela.style.format({'Preço tabela': 'R$ {:.2f}', 'Valor_Excesso': 'R$ {:.2f}'}), use_container_width=True, height=280)
+        st.dataframe(df_excesso_tabela.style.format({
+            'Preço tabela': 'R$ {:.2f}',
+            'Preço de Custo': 'R$ {:.2f}',
+            'Valor_Excesso': 'R$ {:.2f}'
+        }), use_container_width=True, height=280)
         
     with col_tab2:
         st.write("### 🚨 Produtos Críticos em Falta / Ruptura")
         df_falta_tabela = df_loja[df_loja['Valor_Falta'] > 0][
-            ['SKU', 'Descrição', 'Classe', 'Estoque Atual', 'Estoque_Minimo_Qtd', 'Qtd_Falta', 'Preço tabela', 'Valor_Falta']
+            ['SKU', 'Descrição', 'Classe', 'Estoque Atual', 'Estoque_Minimo_Qtd', 'Qtd_Falta', 'Preço tabela', 'Preço de Custo', 'Valor_Falta']
         ].sort_values(by='Valor_Falta', ascending=False)
-        st.dataframe(df_falta_tabela.style.format({'Preço tabela': 'R$ {:.2f}', 'Valor_Falta': 'R$ {:.2f}'}), use_container_width=True, height=280)
+        st.dataframe(df_falta_tabela.style.format({
+            'Preço tabela': 'R$ {:.2f}',
+            'Preço de Custo': 'R$ {:.2f}',
+            'Valor_Falta': 'R$ {:.2f}'
+        }), use_container_width=True, height=280)
     
     st.markdown("---")
