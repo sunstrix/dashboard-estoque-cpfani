@@ -6,7 +6,7 @@ from datetime import datetime
 # 1. Configuração Inicial da Página (Visual Tema O Boticário)
 st.set_page_config(
     page_title="Painel de Performance de Estoque NSF - CP Fani",
-    page_icon="",
+    page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -50,6 +50,17 @@ st.markdown("""
     .stProgress > div > div > div > div {
         background-color: #007A33;
     }
+    
+    /* Estilo para logos das marcas inline */
+    .marca-logo {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+    }
+    .marca-logo img {
+        vertical-align: middle;
+        border-radius: 4px;
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -80,24 +91,51 @@ DE_PARA_LOJAS = {
     23379: "23379 - Assai Piraporinha"
 }
 
+# Nomes limpos das marcas (sem emojis) - usados como chaves internas
+NOMES_MARCAS = {
+    'BOTICARIO': 'O Boticário',
+    'EUDORA': 'Eudora',
+    'QUEM_DISSE_BERENICE': 'Quem Disse, Berenice?'
+}
+
+# Logos das marcas (arquivos PNG no repositório)
+LOGOS_MARCAS = {
+    'O Boticário': 'logo_boticario.png',
+    'Eudora': 'logo_eudora.png',
+    'Quem Disse, Berenice?': 'logo_qdb.png'
+}
+
 # Cores das marcas (ajustadas para harmonizar com tema Boticário)
 CORES_MARCAS = {
-    'O Boticário 🟢': '#007A33',
-    'Eudora 🟣': '#a855f7',
-    'Quem Disse, Berenice? 💖': '#ff4b4b'
+    'O Boticário': '#007A33',
+    'Eudora': '#a855f7',
+    'Quem Disse, Berenice?': '#ff4b4b'
 }
+
+def exibir_marca_com_logo(nome_marca, tamanho_logo=22):
+    """
+    Retorna uma string HTML com a logo da marca seguida do nome.
+    Usado para exibir marcas de forma visualmente rica no dashboard.
+    """
+    logo_path = LOGOS_MARCAS.get(nome_marca, '')
+    if logo_path:
+        return f"<span class='marca-logo'><img src='{logo_path}' width='{tamanho_logo}' height='{tamanho_logo}'> {nome_marca}</span>"
+    return nome_marca
+
+def nome_marca_simples(nome_marca):
+    """Retorna o nome da marca sem formatação HTML (para gráficos e dados)."""
+    return nome_marca
 
 # 3. Conexão direta via engine do Excel (Otimizado para planilhas públicas)
 @st.cache_data(ttl=3600)  # Limpa o cache automaticamente a cada 1 hora
 def carregar_dados_nuvem(url):
     dicionario_marcas = {}
-    abas = {'BOTICARIO': 'O Boticário 🟢', 'EUDORA': 'Eudora 🟣', 'QUEM_DISSE_BERENICE': 'Quem Disse, Berenice? 💖'}
     
     try:
         # Baixa o arquivo binário completo do Excel direto da nuvem
         excel_file = pd.ExcelFile(url)
         
-        for aba_excel, nome_exibicao in abas.items():
+        for aba_excel, nome_exibicao in NOMES_MARCAS.items():
             if aba_excel in excel_file.sheet_names:
                 df = pd.read_excel(excel_file, sheet_name=aba_excel)
                 
@@ -148,7 +186,7 @@ if not dados_marcas:
     st.stop()
 
 # ==========================================
-# CABEÇALHO COM LOGO E TIMESTAMP
+# CABEÇALHO COM LOGO CP FANI E TIMESTAMP
 # ==========================================
 col_logo, col_info = st.columns([1, 3])
 
@@ -156,10 +194,10 @@ with col_logo:
     try:
         st.image("logo_cp_fani.png", width=180)
     except Exception:
-        st.warning("Logo não encontrada. Certifique-se de que o arquivo 'logo_cp_fani.png' está na raiz do projeto.")
+        st.warning("Logo CP Fani não encontrada. Certifique-se de que o arquivo 'logo_cp_fani.png' está na raiz do projeto.")
 
 with col_info:
-    st.title(" Painel de Controle de Estoques e Ruptura")
+    st.title("📊 Painel de Controle de Estoques e Ruptura")
     st.caption(f"🕒 Última atualização da base: **{horario_atualizacao}** | Fonte: Google Sheets")
 
 st.markdown("---")
@@ -178,10 +216,18 @@ pdv_selecionado = int(loja_selecionada_nome.split(" - ")[0])
 
 st.sidebar.markdown("---")
 
-# Filtro de Marca
+# Filtro de Marca (com logos)
 st.sidebar.subheader("Filtro de Marca")
-todas_marcas = ["Todas as Marcas"] + list(dados_marcas.keys())
-marca_selecionada = st.sidebar.selectbox("Selecione a Marca:", todas_marcas)
+opcoes_marca_display = ["Todas as Marcas"] + [exibir_marca_com_logo(m) for m in dados_marcas.keys()]
+opcoes_marca_valor = ["Todas as Marcas"] + list(dados_marcas.keys())
+
+# Mapeia índice selecionado para valor real
+indice_selecionado = st.sidebar.selectbox(
+    "Selecione a Marca:", 
+    range(len(opcoes_marca_display)),
+    format_func=lambda x: opcoes_marca_display[x]
+)
+marca_selecionada = opcoes_marca_valor[indice_selecionado]
 
 st.sidebar.markdown("---")
 if st.sidebar.button("🔄 Forçar Atualização dos Dados"):
@@ -225,9 +271,9 @@ for nome_marca, df_completo in dados_filtrados.items():
         qtd_itens_total += df_loja['Estoque Atual'].sum()
 
 col1, col2, col3, col4 = st.columns(4)
-col1.metric("💰 Valor Estoque Atual (Venda)", f"R$ {v_estoque_atual_total:,.2f}")
+col1.metric(" Valor Estoque Atual (Venda)", f"R$ {v_estoque_atual_total:,.2f}")
 col2.metric("📉 Valor Estoque Mínimo (Venda)", f"R$ {v_estoque_min_total:,.2f}")
-col3.metric("️ Capital Preso (Excesso)", f"R$ {v_excesso_total_total:,.2f}", delta=f"{((v_excesso_total_total/v_estoque_atual_total)*100 if v_estoque_atual_total > 0 else 0):.1f}% do estoque", delta_color="inverse")
+col3.metric("⚠️ Capital Preso (Excesso)", f"R$ {v_excesso_total_total:,.2f}", delta=f"{((v_excesso_total_total/v_estoque_atual_total)*100 if v_estoque_atual_total > 0 else 0):.1f}% do estoque", delta_color="inverse")
 col4.metric("🚨 Risco de Ruptura (Falta)", f"R$ {v_falta_total_total:,.2f}", delta="Abaixo do Mínimo", delta_color="off")
 
 st.markdown("---")
@@ -262,7 +308,7 @@ if marca_selecionada == "Todas as Marcas":
         with col_graf1:
             fig_qtd_marcas = go.Figure()
             fig_qtd_marcas.add_trace(go.Bar(
-                x=df_grafico_marcas['Marca'], 
+                x=[exibir_marca_com_logo(m, tamanho_logo=25) for m in df_grafico_marcas['Marca']], 
                 y=df_grafico_marcas['Qtd Itens'], 
                 name='Quantidade de Itens',
                 marker_color=[CORES_MARCAS.get(m, '#007A33') for m in df_grafico_marcas['Marca']],
@@ -282,7 +328,7 @@ if marca_selecionada == "Todas as Marcas":
         with col_graf2:
             fig_custo_marcas = go.Figure()
             fig_custo_marcas.add_trace(go.Bar(
-                x=df_grafico_marcas['Marca'], 
+                x=[exibir_marca_com_logo(m, tamanho_logo=25) for m in df_grafico_marcas['Marca']], 
                 y=df_grafico_marcas['Custo Total'], 
                 name='Custo Total',
                 marker_color=[CORES_MARCAS.get(m, '#007A33') for m in df_grafico_marcas['Marca']],
@@ -329,10 +375,18 @@ if not df_curva_consolidado.empty:
             fill_value=0
         ).reset_index()
         
-        # Adiciona coluna de total
-        df_pivot['Total Geral'] = df_pivot[[col for col in df_pivot.columns if col != 'Curva']].sum(axis=1)
+        # Adiciona coluna de total geral (soma de todas as marcas por curva)
+        colunas_marcas = [col for col in df_pivot.columns if col != 'Curva']
+        df_pivot['Total Geral'] = df_pivot[colunas_marcas].sum(axis=1)
         
-        # Formata valores
+        # Adiciona linha de total por marca (soma de todas as curvas)
+        linha_total = {'Curva': 'TOTAL'}
+        for col in colunas_marcas:
+            linha_total[col] = df_pivot[col].sum()
+        linha_total['Total Geral'] = df_pivot['Total Geral'].sum()
+        df_pivot = pd.concat([df_pivot, pd.DataFrame([linha_total])], ignore_index=True)
+        
+        # Formata valores monetários
         colunas_valor = [col for col in df_pivot.columns if col != 'Curva']
         for col in colunas_valor:
             df_pivot[col] = df_pivot[col].apply(lambda x: f"R$ {x:,.2f}")
@@ -342,6 +396,13 @@ if not df_curva_consolidado.empty:
         # Mostra apenas a marca selecionada
         df_exibicao = df_curva_consolidado[['Curva', 'Custo Total', 'Qtd SKUs']].copy()
         df_exibicao = df_exibicao.sort_values('Curva')
+        
+        # Adiciona linha de total
+        total_custo = df_exibicao['Custo Total'].sum()
+        total_skus = df_exibicao['Qtd SKUs'].sum()
+        df_total = pd.DataFrame([{'Curva': 'TOTAL', 'Custo Total': total_custo, 'Qtd SKUs': total_skus}])
+        df_exibicao = pd.concat([df_exibicao, df_total], ignore_index=True)
+        
         df_exibicao['Custo Total'] = df_exibicao['Custo Total'].apply(lambda x: f"R$ {x:,.2f}")
         st.dataframe(df_exibicao, use_container_width=True, hide_index=True)
     
@@ -454,7 +515,8 @@ for nome_marca, df_completo in dados_filtrados.items():
         st.warning(f"Sem registros de movimentação para este PDV na marca {nome_marca}.")
         continue
     
-    st.markdown(f"### {nome_marca}")
+    # Título da marca com logo
+    st.markdown(f"### {exibir_marca_com_logo(nome_marca, tamanho_logo=25)}")
     
     col_tab1, col_tab2 = st.columns(2)
     with col_tab1:
@@ -465,7 +527,7 @@ for nome_marca, df_completo in dados_filtrados.items():
         st.dataframe(df_excesso_tabela.style.format({'Preço tabela': 'R$ {:.2f}', 'Valor_Excesso': 'R$ {:.2f}'}), use_container_width=True, height=280)
         
     with col_tab2:
-        st.write("### 🚨 Produtos Críticos em Falta / Ruptura")
+        st.write("###  Produtos Críticos em Falta / Ruptura")
         df_falta_tabela = df_loja[df_loja['Valor_Falta'] > 0][
             ['SKU', 'Descrição', 'Classe', 'Estoque Atual', 'Estoque_Minimo_Qtd', 'Qtd_Falta', 'Preço tabela', 'Valor_Falta']
         ].sort_values(by='Valor_Falta', ascending=False)
