@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
-from streamlit_gsheets import GSheetsConnection
+import urllib.parse
 
 # 1. Configuração Inicial da Página (Visual Dark Mode)
 st.set_page_config(
@@ -22,10 +22,10 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# SEU LINK OFICIAL CONFIGURADO AQUI:
-URL_PLANILHA = "https://docs.google.com/spreadsheets/d/1EDDyKie9UiugMLMowcPzHfViqzziFcSgxVPvZ2Rx3L0/edit?usp=sharing"
+# ID OFICIAL DA SUA PLANILHA EXTRAÍDO DO SEU LINK
+SPREADSHEET_ID = "1EDDyKie9UiugMLMowcPzHfViqzziFcSgxVPvZ2Rx3L0"
 
-# 2. Dicionário com os seus 17 PDVs reais (Substitua os nomes abaixo pelos oficiais se desejar)
+# 2. Dicionário com os seus 17 PDVs reais
 DE_PARA_LOJAS = {
     4842: "4842 - Loja 4842",
     5152: "5152 - Loja 5152",
@@ -46,20 +46,22 @@ DE_PARA_LOJAS = {
     23379: "23379 - Loja 23379"
 }
 
-# 3. Conexão direta com o Google Sheets via API do Streamlit
-@st.cache_data(ttl=3600)  # Atualiza o cache automaticamente a cada 1 hora
-def carregar_dados_nuvem(url):
+# 3. Conexão direta e ultra-veloz via export de API do Google Sheets
+@st.cache_data(ttl=3600)  # Limpa o cache automaticamente a cada 1 hora
+def carregar_dados_nuvem(sheet_id):
     marcas_dict = {}
     abas = {'BOTICARIO': 'O Boticário 🟢', 'EUDORA': 'Eudora 🟣', 'QUEM_DISSE_BERENICE': 'Quem Disse, Berenice? 💖'}
     
-    conn = st.connection("gsheets", type=GSheetsConnection)
-    
     for aba_excel, nome_exibicao in abas.items():
         try:
-            # Lê cada aba direto da nuvem
-            df = conn.read(spreadsheet=url, worksheet=aba_excel)
+            # Converte a requisição da aba para formato amigável de URL
+            aba_codificada = urllib.parse.quote(aba_excel)
+            url_csv = f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:csv&sheet={aba_codificada}"
             
-            # Garante que colunas críticas sejam numéricas
+            # Lê os dados da nuvem instantaneamente via CSV Stream
+            df = pd.read_csv(url_csv)
+            
+            # Garante que colunas críticas sejam tratadas como números
             df['PDV'] = pd.to_numeric(df['PDV'], errors='coerce')
             df['Estoque Atual'] = pd.to_numeric(df['Estoque Atual'], errors='coerce').fillna(0)
             df['Preço tabela'] = pd.to_numeric(df['Preço tabela'], errors='coerce').fillna(0)
@@ -86,7 +88,11 @@ def carregar_dados_nuvem(url):
 
 # Carregamento dos dados
 with st.spinner("Conectando ao Google Drive e atualizando estoques..."):
-    dados_marcas = carregar_dados_nuvem(URL_PLANILHA)
+    dados_marcas = carregar_dados_nuvem(SPREADSHEET_ID)
+
+if not dados_marcas:
+    st.error("Não foi possível carregar nenhuma aba. Verifique se a planilha está compartilhada como 'Qualquer pessoa com o link pode ler'.")
+    st.stop()
 
 # 4. Barra Lateral - Filtros
 st.sidebar.title("Filtros de Visão")
