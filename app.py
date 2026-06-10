@@ -67,14 +67,9 @@ def carregar_dados_nuvem(url):
                 df['Estoque Atual'] = pd.to_numeric(df['Estoque Atual'], errors='coerce').fillna(0)
                 df['Preço tabela'] = pd.to_numeric(df['Preço tabela'], errors='coerce').fillna(0)
                 
-                # Tenta ler a coluna de Preço de Custo (nomes possíveis)
-                colunas_custo_possiveis = ['Preço de Custo', 'Custo Unitário', 'Custo', 'Preco de Custo', 'Preco_Custo', 'custo']
-                df['Preço de Custo'] = 0  # Valor padrão
-                
-                for col_custo in colunas_custo_possiveis:
-                    if col_custo in df.columns:
-                        df['Preço de Custo'] = pd.to_numeric(df[col_custo], errors='coerce').fillna(0)
-                        break
+                # UTILIZA PREÇO TABELA COMO BASE PARA CUSTO
+                # Como não há coluna de custo separada, usamos o preço de tabela
+                df['Preço de Custo'] = df['Preço tabela']
                 
                 # Regras de Estoque Mínimo por Curva
                 regras_minimo = {'A': 15, 'B': 10, 'C': 5, 'E': 2}
@@ -90,7 +85,7 @@ def carregar_dados_nuvem(url):
                 df['Qtd_Falta'] = (df['Estoque_Minimo_Qtd'] - df['Estoque Atual']).clip(lower=0)
                 df['Valor_Falta'] = df['Qtd_Falta'] * df['Preço tabela']
                 
-                # NOVOS CÁLCULOS - Preço de Custo
+                # CÁLCULOS DE CUSTO - Baseado no Preço Tabela
                 df['Valor_Custo_Estoque_Atual'] = df['Estoque Atual'] * df['Preço de Custo']
                 df['Valor_Custo_Estoque_Minimo'] = df['Estoque_Minimo_Qtd'] * df['Preço de Custo']
                 
@@ -147,7 +142,7 @@ for i, (nome_marca, df_completo) in enumerate(dados_marcas.items()):
         v_excesso_total = df_loja['Valor_Excesso'].sum()
         v_falta_total = df_loja['Valor_Falta'].sum()
         
-        # KPIs - Preço de Custo
+        # KPIs - Preço de Custo (baseado no Preço Tabela)
         v_custo_estoque_atual = df_loja['Valor_Custo_Estoque_Atual'].sum()
         v_custo_estoque_min = df_loja['Valor_Custo_Estoque_Minimo'].sum()
         
@@ -159,16 +154,10 @@ for i, (nome_marca, df_completo) in enumerate(dados_marcas.items()):
         
         # Nova linha de KPIs - Custo
         st.markdown("---")
-        st.subheader("💵 Análise de Custos")
+        st.subheader("💵 Análise de Custos (Baseado no Preço Tabela)")
         col5, col6 = st.columns(2)
-        col5.metric("💵 Custo Total do Estoque Atual", f"R$ {v_custo_estoque_atual:,.2f}", help="Soma do preço de custo de todos os produtos em estoque")
-        col6.metric("💵 Custo Total do Estoque Mínimo", f"R$ {v_custo_estoque_min:,.2f}", help="Soma do preço de custo do estoque mínimo necessário")
-        
-        # Verifica se há dados de custo
-        tem_custo = v_custo_estoque_atual > 0
-        
-        if not tem_custo:
-            st.info("ℹ️ **Atenção:** A planilha não contém coluna de 'Preço de Custo'. Os valores de custo estão zerados. Adicione uma coluna chamada 'Preço de Custo' ou 'Custo Unitário' na planilha para visualizar esta análise.")
+        col5.metric("💵 Custo Total do Estoque Atual", f"R$ {v_custo_estoque_atual:,.2f}", help="Soma do preço de tabela de todos os produtos em estoque")
+        col6.metric("💵 Custo Total do Estoque Mínimo", f"R$ {v_custo_estoque_min:,.2f}", help="Soma do preço de tabela do estoque mínimo necessário")
         
         # Tabela de Custo por Curva (A, B, C, E)
         st.markdown("---")
@@ -192,8 +181,8 @@ for i, (nome_marca, df_completo) in enumerate(dados_marcas.items()):
             # Exibe a tabela
             st.dataframe(df_exibicao, use_container_width=True, hide_index=True)
             
-            # Gráfico de custo por curva (apenas se houver custo)
-            if tem_custo and not df_agrupado.empty:
+            # Gráfico de custo por curva
+            if not df_agrupado.empty:
                 fig_custo = go.Figure()
                 fig_custo.add_trace(go.Bar(
                     x=df_agrupado['Curva'], 
