@@ -68,7 +68,7 @@ def carregar_dados_nuvem(url):
                 df['Preço tabela'] = pd.to_numeric(df['Preço tabela'], errors='coerce').fillna(0)
                 
                 # Tenta ler a coluna de Preço de Custo (nomes possíveis)
-                colunas_custo_possiveis = ['Preço de Custo', 'Custo Unitário', 'Custo', 'Preco de Custo', 'Preco_Custo']
+                colunas_custo_possiveis = ['Preço de Custo', 'Custo Unitário', 'Custo', 'Preco de Custo', 'Preco_Custo', 'custo']
                 df['Preço de Custo'] = 0  # Valor padrão
                 
                 for col_custo in colunas_custo_possiveis:
@@ -164,37 +164,42 @@ for i, (nome_marca, df_completo) in enumerate(dados_marcas.items()):
         col5.metric("💵 Custo Total do Estoque Atual", f"R$ {v_custo_estoque_atual:,.2f}", help="Soma do preço de custo de todos os produtos em estoque")
         col6.metric("💵 Custo Total do Estoque Mínimo", f"R$ {v_custo_estoque_min:,.2f}", help="Soma do preço de custo do estoque mínimo necessário")
         
+        # Verifica se há dados de custo
+        tem_custo = v_custo_estoque_atual > 0
+        
+        if not tem_custo:
+            st.info("ℹ️ **Atenção:** A planilha não contém coluna de 'Preço de Custo'. Os valores de custo estão zerados. Adicione uma coluna chamada 'Preço de Custo' ou 'Custo Unitário' na planilha para visualizar esta análise.")
+        
         # Tabela de Custo por Curva (A, B, C, E)
         st.markdown("---")
         st.subheader("📊 Custo Total por Curva de Produto")
         
         if 'Classe' in df_loja.columns:
             # Agrupa por Classe e calcula o total de custo do estoque atual
-            custo_por_curva = df_loja.groupby('Classe')['Valor_Custo_Estoque_Atual'].sum().reset_index()
-            custo_por_curva.columns = ['Curva', 'Custo Total (R$)']
+            df_agrupado = df_loja.groupby('Classe').agg({
+                'Valor_Custo_Estoque_Atual': 'sum',
+                'SKU': 'count'
+            }).reset_index()
+            df_agrupado.columns = ['Curva', 'Custo Total', 'Qtd SKUs']
             
-            # Adiciona quantidade de SKUs por curva
-            skus_por_curva = df_loja.groupby('Classe').size().reset_index(name='Qtd SKUs')
-            custo_por_curva = custo_por_curva.merge(skus_por_curva, on='Curva', how='left')
+            # Ordena por Curva
+            df_agrupado = df_agrupado.sort_values('Curva')
             
             # Formata para exibição
-            custo_por_curva = custo_por_curva.sort_values('Curva')
-            custo_por_curva['Custo Total (R$)'] = custo_por_curva['Custo Total (R$)'].apply(lambda x: f"R$ {x:,.2f}")
+            df_exibicao = df_agrupado.copy()
+            df_exibicao['Custo Total'] = df_exibicao['Custo Total'].apply(lambda x: f"R$ {x:,.2f}")
             
             # Exibe a tabela
-            st.dataframe(custo_por_curva, use_container_width=True, hide_index=True)
+            st.dataframe(df_exibicao, use_container_width=True, hide_index=True)
             
-            # Gráfico de custo por curva
-            df_grafico_custo = df_loja.groupby('Classe')['Valor_Custo_Estoque_Atual'].sum().reset_index()
-            df_grafico_custo.columns = ['Curva', 'Custo Total']
-            
-            if not df_grafico_custo.empty:
+            # Gráfico de custo por curva (apenas se houver custo)
+            if tem_custo and not df_agrupado.empty:
                 fig_custo = go.Figure()
                 fig_custo.add_trace(go.Bar(
-                    x=df_grafico_custo['Curva'], 
-                    y=df_grafico_custo['Custo Total'], 
+                    x=df_agrupado['Curva'], 
+                    y=df_agrupado['Custo Total'], 
                     marker_color=['#00f2fe', '#ff4b4b', '#ffa500', '#90ee90'],
-                    text=[f"R$ {v:,.2f}" for v in df_grafico_custo['Custo Total']],
+                    text=[f"R$ {v:,.2f}" for v in df_agrupado['Custo Total']],
                     textposition='auto'
                 ))
                 fig_custo.update_layout(
