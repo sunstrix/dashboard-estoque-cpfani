@@ -56,11 +56,14 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# ID OFICIAL DA PLANILHA EXTRAÍDO DO LINK FORNECIDO
+# ID OFICIAL DA PLANILHA PRINCIPAL EXTRAÍDO DO LINK FORNECIDO
 SPREADSHEET_ID = "1PbNYsNPp6ShErx0U3Ml_dJpN-0MPwoxz"
 
 # URL de exportação direta em formato Excel (Método otimizado para planilhas públicas)
 URL_EXCEL = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/export?format=xlsx"
+
+# NOVA PLANILHA DE ESTOQUE DE SEGURANÇA
+URL_ESTOQUE_SEGURANCA = "https://docs.google.com/spreadsheets/d/1uHonFnFM4p7bz4s7YpewhKHNs6fSEfw9rDMTKC7jtHE/export?format=xlsx"
 
 # 2. Dicionário com os 17 PDVs reais (Nomes atualizados)
 DE_PARA_LOJAS = {
@@ -131,18 +134,76 @@ def obter_horario_brasilia():
     agora_brasilia = datetime.now(fuso_brasilia)
     return agora_brasilia.strftime("%d/%m/%Y às %H:%M:%S")
 
+def carregar_estoque_seguranca(url):
+    """
+    Carrega a planilha de estoque de segurança e retorna um DataFrame
+    com as colunas: PDV, SKU, ESTOQUE DE SEGURANCA
+    
+    Se o campo estiver em branco, considera como 0.
+    """
+    try:
+        # Baixa o arquivo Excel da planilha de estoque de segurança
+        excel_file = pd.ExcelFile(url)
+        
+        # Tenta carregar da primeira aba disponível ou procura por nomes comuns
+        aba_encontrada = None
+        for aba_nome in excel_file.sheet_names:
+            if aba_nome.upper() in ['ESTOQUE_SEGURANCA', 'ESTOQUE_DE_SEGURANCA', 'SEGURANCA', 'MINIMOS', 'PDV', 'DADOS']:
+                aba_encontrada = aba_nome
+                break
+        
+        # Se não encontrou aba específica, usa a primeira
+        if aba_encontrada is None:
+            aba_encontrada = excel_file.sheet_names[0]
+        
+        df_seguranca = pd.read_excel(excel_file, sheet_name=aba_encontrada)
+        
+        # Normaliza nomes das colunas (remove espaços extras, converte para maiúsculo)
+        df_seguranca.columns = [col.strip().upper() for col in df_seguranca.columns]
+        
+        # Verifica se as colunas necessárias existem
+        colunas_necessarias = ['PDV', 'SKU']
+        colunas_faltantes = [col for col in colunas_necessarias if col not in df_seguranca.columns]
+        
+        if colunas_faltantes:
+            st.warning(f"⚠️ Colunas faltantes na planilha de estoque de segurança: {', '.join(colunas_faltantes)}")
+            return pd.DataFrame()
+        
+        # Identifica a coluna de estoque de segurança (pode ter vários nomes)
+        colunas_possiveis = ['ESTOQUE DE SEGURANCA', 'ESTOQUE_DE_SEGURANCA', 'ESTOQUE_SEGURANCA', 
+                           'ESTOQUE MINIMO', 'ESTOQUE_MINIMO', 'MINIMO', 'SEGURANCA']
+        coluna_seguranca = None
+        
+        for col in colunas_possiveis:
+            if col in df_seguranca.columns:
+                coluna_seguranca = col
+                break
+        
+        if coluna_seguranca is None:
+            st.warning("⚠️ Coluna de estoque de segurança não encontrada na planilha. Usando valor padrão 0.")
+            df_seguranca['ESTOQUE_DE_SEGURANCA'] = 0
+        else:
+            # Renomeia para padronizar
+            df_seguranca = df_seguranca.rename(columns={coluna_seguranca: 'ESTOQUE_DE_SEGURANCA'})
+            # Converte para numérico e preenche vazios com 0
+            df_seguranca['ESTOQUE_DE_SEGURANCA'] = pd.to_numeric(df_seguranca['ESTOQUE_DE_SEGURANCA'], errors='coerce').fillna(0)
+        
+        # Garante que PDV e SKU sejam numéricos/texto corretamente
+        df_seguranca['PDV'] = pd.to_numeric(df_seguranca['PDV'], errors='coerce')
+        df_seguranca['SKU'] = df_seguranca['SKU'].astype(str).str.strip()
+        
+        # Mantém apenas as colunas necessárias
+        df_seguranca = df_seguranca[['PDV', 'SKU', 'ESTOQUE_DE_SEGURANCA']].copy()
+        
+        return df_seguranca
+        
+    except Exception as e:
+        st.error(f"❌ Erro ao carregar planilha de estoque de segurança: {str(e)}")
+        return pd.DataFrame()
+
 def obter_data_atualizacao_planilha(url_excel):
     """
     Tenta obter a data/hora da última atualização da planilha do Google Sheets.
-    
-    Estratégia:
-    1. Baixa o arquivo Excel
-    2. Procura por células com nomes específicos que contenham a data de atualização
-    3. Se não encontrar, retorna None
-    
-    Para funcionar, a planilha deve ter uma célula com:
-    - Nome: "ÚLTIMA_ATUALIZACAO" ou "DATA_ATUALIZACAO" ou "DATA_MODIFICACAO"
-    - OU uma célula específica (ex: A1 da aba "INFO") com a data/hora
     """
     try:
         # Baixa o arquivo Excel
@@ -152,10 +213,6 @@ def obter_data_atualizacao_planilha(url_excel):
             excel_file = BytesIO(response.content)
             workbook = openpyxl.load_workbook(excel_file)
             
-            # Lista de nomes de células/abas para procurar
-            possibilidades = ['ÚLTIMA_ATUALIZACAO', 'DATA_ATUALIZACAO', 'DATA_MODIFICACAO', 
-                            'ULTIMA_ATUALIZACAO', 'ATUALIZACAO', 'DATA']
-            
             # Procura em todas as abas
             for sheet_name in workbook.sheetnames:
                 sheet = workbook[sheet_name]
@@ -163,26 +220,13 @@ def obter_data_atualizacao_planilha(url_excel):
                 # Procura células com nomes específicos
                 for row in sheet.iter_rows(min_row=1, max_row=10, max_col=5):
                     for cell in row:
-                        # Verifica se o valor da célula contém texto de data/hora
                         if cell.value:
                             valor_str = str(cell.value).strip().upper()
-                            # Verifica se parece ser uma data/hora
                             if any(p in valor_str for p in ['/', ':', '202', '203']):
-                                # Tenta extrair data/hora
                                 if isinstance(cell.value, datetime):
                                     return cell.value.strftime("%d/%m/%Y às %H:%M:%S")
                                 elif isinstance(cell.value, str):
                                     return cell.value
-            
-            # Se não encontrou célula específica, verifica se há uma aba chamada "INFO" ou "METADADOS"
-            for sheet_name in ['INFO', 'METADADOS', 'CONFIG', 'DADOS_GERAIS']:
-                if sheet_name in workbook.sheetnames:
-                    sheet = workbook[sheet_name]
-                    # Verifica as primeiras células
-                    for row in sheet.iter_rows(min_row=1, max_row=5, max_col=2):
-                        for cell in row:
-                            if cell.value and isinstance(cell.value, datetime):
-                                return cell.value.strftime("%d/%m/%Y às %H:%M:%S")
             
             return None
         else:
@@ -193,16 +237,22 @@ def obter_data_atualizacao_planilha(url_excel):
 
 # 3. Conexão direta via engine do Excel (Otimizado para planilhas públicas)
 @st.cache_data(ttl=3600)  # Limpa o cache automaticamente a cada 1 hora
-def carregar_dados_nuvem(url):
+def carregar_dados_nuvem(url_principal, url_seguranca):
     dicionario_marcas = {}
     data_atualizacao = None
     
     try:
+        # Carrega a planilha de estoque de segurança
+        df_estoque_seguranca = carregar_estoque_seguranca(url_seguranca)
+        
+        if df_estoque_seguranca.empty:
+            st.warning("⚠️ Planilha de estoque de segurança está vazia ou não pôde ser carregada. Usando regras padrão.")
+        
         # Tenta obter a data de atualização da planilha
-        data_atualizacao = obter_data_atualizacao_planilha(url)
+        data_atualizacao = obter_data_atualizacao_planilha(url_principal)
         
         # Baixa o arquivo binário completo do Excel direto da nuvem
-        excel_file = pd.ExcelFile(url)
+        excel_file = pd.ExcelFile(url_principal)
         
         for aba_excel, nome_exibicao in NOMES_MARCAS.items():
             if aba_excel in excel_file.sheet_names:
@@ -216,12 +266,23 @@ def carregar_dados_nuvem(url):
                 df['Estoque Atual'] = pd.to_numeric(df['Estoque Atual'], errors='coerce').fillna(0)
                 df['Preço tabela'] = pd.to_numeric(df['Preço tabela'], errors='coerce').fillna(0)
                 
+                # Converte SKU para string para merge correto
+                df['SKU'] = df['SKU'].astype(str).str.strip()
+                
                 # UTILIZA PREÇO TABELA COMO BASE PARA CUSTO
                 df['Preço de Custo'] = df['Preço tabela']
                 
-                # Regras de Estoque Mínimo por Curva
-                regras_minimo = {'A': 15, 'B': 10, 'C': 5, 'E': 2}
-                df['Estoque_Minimo_Qtd'] = df['Classe'].map(regras_minimo).fillna(2)
+                # MERGE com a planilha de estoque de segurança
+                if not df_estoque_seguranca.empty:
+                    df = df.merge(df_estoque_seguranca, on=['PDV', 'SKU'], how='left')
+                    # Se não encontrou no merge, usa 0
+                    df['Estoque_Minimo_Qtd'] = df['ESTOQUE_DE_SEGURANCA'].fillna(0)
+                    # Remove a coluna temporária
+                    df = df.drop(columns=['ESTOQUE_DE_SEGURANCA'])
+                else:
+                    # Se não tem planilha de segurança, usa regras padrão
+                    regras_minimo = {'A': 15, 'B': 10, 'C': 5, 'E': 2}
+                    df['Estoque_Minimo_Qtd'] = df['Classe'].map(regras_minimo).fillna(2)
                 
                 # Cálculos Financeiros Dinâmicos - Preço de Venda
                 df['Valor_Estoque_Atual'] = df['Estoque Atual'] * df['Preço tabela']
@@ -247,7 +308,7 @@ def carregar_dados_nuvem(url):
 
 # Carregamento dos dados e captura do horário de Brasília
 with st.spinner("Conectando ao Google Drive e processando bases..."):
-    dados_marcas, data_atualizacao_planilha = carregar_dados_nuvem(URL_EXCEL)
+    dados_marcas, data_atualizacao_planilha = carregar_dados_nuvem(URL_EXCEL, URL_ESTOQUE_SEGURANCA)
     horario_carregamento = obter_horario_brasilia()
 
 if not dados_marcas:
@@ -598,9 +659,24 @@ for nome_marca, df_completo in dados_filtrados.items():
     col_tab1, col_tab2 = st.columns(2)
     with col_tab1:
         st.write("### 🛑 Excessos Críticos")
-        df_excesso_tabela = df_loja[df_loja['Valor_Excesso'] > 0][
+        
+        # FILTRO IMPORTANTE: Exclui SKUs com estoque de segurança = 0
+        # Primeiro verifica se tem excesso, depois filtra por estoque de segurança > 0
+        df_excesso_tabela = df_loja[
+            (df_loja['Valor_Excesso'] > 0) & 
+            (df_loja['Estoque_Minimo_Qtd'] > 0)
+        ][
             ['SKU', 'Descrição', 'Classe', 'Estoque Atual', 'Estoque_Minimo_Qtd', 'Qtd_Excesso', 'Preço tabela', 'Valor_Excesso']
         ].sort_values(by='Valor_Excesso', ascending=False)
+        
+        # Conta quantos foram excluídos
+        total_excessos_brutos = len(df_loja[df_loja['Valor_Excesso'] > 0])
+        total_excessos_filtrados = len(df_excesso_tabela)
+        total_excluidos = total_excessos_brutos - total_excessos_filtrados
+        
+        if total_excluidos > 0:
+            st.info(f"ℹ️ {total_excluidos} produto(s) com excesso foram excluídos por terem estoque de segurança = 0")
+        
         st.dataframe(df_excesso_tabela.style.format({'Preço tabela': 'R$ {:.2f}', 'Valor_Excesso': 'R$ {:.2f}'}), use_container_width=True, height=280)
         
     with col_tab2:
