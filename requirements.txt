@@ -1,4 +1,20 @@
+# ==========================================
+# DEPENDÊNCIAS DO DASHBOARD ESTOQUE CPFANI
+# ==========================================
+
+# Framework principal do Dashboard
 streamlit
+
+# Manipulação e análise de dados
 pandas
-plotly
 openpyxl
+
+# Visualização de dados
+plotly
+
+# Integração segura com Google Sheets
+gspread
+google-auth
+
+# Gerenciamento seguro de variáveis de ambiente (credenciais)
+python-dotenv
