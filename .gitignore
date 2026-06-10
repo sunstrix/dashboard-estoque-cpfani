@@ -1,0 +1,117 @@
+# ==========================================
+# ARQUIVOS SENSÍVEIS E CREDENCIAIS
+# ==========================================
+# Credenciais do Google Drive / Google Cloud
+credentials.json
+service_account.json
+client_secret.json
+*.json
+!package.json
+!package-lock.json
+
+# Variáveis de ambiente e configurações locais
+.env
+.env.local
+.env.*.local
+config.local.py
+
+# Tokens e chaves de API
+*.pem
+*.key
+*.crt
+
+# ==========================================
+# AMBIENTE VIRTUAL E DEPENDÊNCIAS
+# ==========================================
+# Ambientes virtuais Python
+venv/
+.venv/
+env/
+.venv/
+ENV/
+
+# Distribuição / empacotamento
+build/
+dist/
+*.egg-info/
+*.egg
+
+# ==========================================
+# CACHE, LOGS E DADOS TEMPORÁRIOS
+# ==========================================
+# Byte-compiled / otimizado
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Logs da aplicação
+*.log
+logs/
+logs.log
+
+# Dados temporários e exports locais
+*.csv
+*.xlsx
+*.xls
+!template_*.xlsx
+!modelo_*.csv
+temp/
+tmp/
+
+# Cache do Streamlit (se aplicável)
+.streamlit/secrets.toml
+
+# ==========================================
+# ARQUIVOS DE SISTEMA
+# ==========================================
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+.Spotlight-V100
+.Trashes
+
+# Linux
+*~
+.directory
+.Trash-*
+
+# ==========================================
+# EDITORES E IDEs
+# ==========================================
+# VS Code
+.vscode/
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# PyCharm / JetBrains
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# ==========================================
+# OUTROS
+# ==========================================
+# Arquivos de backup
+*.bak
+*.backup
+*.old
+
+# Arquivos de teste locais
+test_data/
