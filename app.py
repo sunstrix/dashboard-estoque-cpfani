@@ -1,23 +1,55 @@
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
+from datetime import datetime
 
-# 1. Configuração Inicial da Página (Visual Modo Escuro)
+# 1. Configuração Inicial da Página (Visual Tema O Boticário)
 st.set_page_config(
-    page_title="Painel de Performance de Estoque NSF",
+    page_title="Painel de Performance de Estoque NSF - CP Fani",
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Estilização CSS para forçar o tema escuro premium
+# Estilização CSS para tema O Boticário (Verde Escuro + Dourado)
 st.markdown("""
     <style>
     .main { background-color: #0e1117; }
-    div[data-testid="stMetricValue"] { font-size: 28px; color: #00f2fe; }
+    
+    /* Cores dos KPIs - Tema Boticário */
+    div[data-testid="stMetricValue"] { font-size: 28px; color: #D4AF37; }
     div[data-testid="stMetricLabel"] { font-size: 14px; color: #a3b8cc; }
+    
+    /* Abas com destaque dourado */
     .stTabs [data-baseweb="tab"] { color: #a3b8cc; font-size: 16px; }
-    .stTabs [data-baseweb="tab"][aria-selected="true"] { color: #00f2fe; font-weight: bold; }
+    .stTabs [data-baseweb="tab"][aria-selected="true"] { color: #D4AF37; font-weight: bold; }
+    
+    /* Botão de atualização com cor Boticário */
+    div.stButton > button {
+        background-color: #007A33;
+        color: white;
+        border: none;
+        border-radius: 5px;
+        padding: 0.5rem 1rem;
+    }
+    div.stButton > button:hover {
+        background-color: #006838;
+        color: #D4AF37;
+    }
+    
+    /* Sidebar */
+    section[data-testid="stSidebar"] {
+        background-color: #0a0d12;
+        border-right: 2px solid #007A33;
+    }
+    
+    /* Títulos */
+    h1, h2, h3 { color: #D4AF37; }
+    
+    /* Barra de progresso e elementos */
+    .stProgress > div > div > div > div {
+        background-color: #007A33;
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -48,9 +80,9 @@ DE_PARA_LOJAS = {
     23379: "23379 - Assai Piraporinha"
 }
 
-# Cores das marcas
+# Cores das marcas (ajustadas para harmonizar com tema Boticário)
 CORES_MARCAS = {
-    'O Boticário 🟢': '#00f2fe',
+    'O Boticário 🟢': '#007A33',
     'Eudora 🟣': '#a855f7',
     'Quem Disse, Berenice? 💖': '#ff4b4b'
 }
@@ -106,13 +138,31 @@ def carregar_dados_nuvem(url):
         
     return dicionario_marcas
 
-# Carregamento dos dados
+# Carregamento dos dados e captura do horário de atualização
 with st.spinner("Conectando ao Google Drive e processando bases..."):
     dados_marcas = carregar_dados_nuvem(URL_EXCEL)
+    horario_atualizacao = datetime.now().strftime("%d/%m/%Y às %H:%M:%S")
 
 if not dados_marcas:
     st.error("Nenhum dado foi carregado. Verifique as permissões de compartilhamento da planilha.")
     st.stop()
+
+# ==========================================
+# CABEÇALHO COM LOGO E TIMESTAMP
+# ==========================================
+col_logo, col_info = st.columns([1, 3])
+
+with col_logo:
+    try:
+        st.image("logo_cp_fani.png", width=180)
+    except Exception:
+        st.warning("Logo não encontrada. Certifique-se de que o arquivo 'logo_cp_fani.png' está na raiz do projeto.")
+
+with col_info:
+    st.title("📊 Painel de Controle de Estoques e Ruptura")
+    st.caption(f" Última atualização da base: **{horario_atualizacao}** | Fonte: Google Sheets")
+
+st.markdown("---")
 
 # 4. Barra Lateral - Filtros
 st.sidebar.title("Filtros de Visualização")
@@ -138,8 +188,7 @@ if st.sidebar.button("🔄 Forçar Atualização dos Dados"):
     st.cache_data.clear()
     st.rerun()
 
-# 5. Corpo do Painel
-st.title("📊 Painel de Controle de Estoques e Ruptura")
+# Subtítulo da análise
 st.subheader(f"Análise Atualizada: {loja_selecionada_nome}")
 
 # Filtra dados pela marca selecionada
@@ -176,7 +225,7 @@ for nome_marca, df_completo in dados_filtrados.items():
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("💰 Valor Estoque Atual (Venda)", f"R$ {v_estoque_atual_total:,.2f}")
 col2.metric("📉 Valor Estoque Mínimo (Venda)", f"R$ {v_estoque_min_total:,.2f}")
-col3.metric("⚠️ Capital Preso (Excesso)", f"R$ {v_excesso_total_total:,.2f}", delta=f"{((v_excesso_total_total/v_estoque_atual_total)*100 if v_estoque_atual_total > 0 else 0):.1f}% do estoque", delta_color="inverse")
+col3.metric("️ Capital Preso (Excesso)", f"R$ {v_excesso_total_total:,.2f}", delta=f"{((v_excesso_total_total/v_estoque_atual_total)*100 if v_estoque_atual_total > 0 else 0):.1f}% do estoque", delta_color="inverse")
 col4.metric("🚨 Risco de Ruptura (Falta)", f"R$ {v_falta_total_total:,.2f}", delta="Abaixo do Mínimo", delta_color="off")
 
 st.markdown("---")
@@ -217,7 +266,7 @@ if marca_selecionada == "Todas as Marcas":
                 x=df_grafico_marcas['Marca'], 
                 y=df_grafico_marcas['Estoque Atual'], 
                 name='Estoque Atual',
-                marker_color=[CORES_MARCAS.get(m, '#00f2fe') for m in df_grafico_marcas['Marca']],
+                marker_color=[CORES_MARCAS.get(m, '#007A33') for m in df_grafico_marcas['Marca']],
                 text=[f"R$ {v:,.0f}" for v in df_grafico_marcas['Estoque Atual']],
                 textposition='auto'
             ))
@@ -237,7 +286,7 @@ if marca_selecionada == "Todas as Marcas":
                 x=df_grafico_marcas['Marca'], 
                 y=df_grafico_marcas['Custo Total'], 
                 name='Custo Total',
-                marker_color=[CORES_MARCAS.get(m, '#00f2fe') for m in df_grafico_marcas['Marca']],
+                marker_color=[CORES_MARCAS.get(m, '#007A33') for m in df_grafico_marcas['Marca']],
                 text=[f"R$ {v:,.0f}" for v in df_grafico_marcas['Custo Total']],
                 textposition='auto'
             ))
@@ -255,7 +304,7 @@ if marca_selecionada == "Todas as Marcas":
 # CUSTO POR CURVA (CONSOLIDADO OU POR MARCA)
 # ==========================================
 st.markdown("---")
-st.subheader(" Custo Total por Curva de Produto")
+st.subheader("📊 Custo Total por Curva de Produto")
 
 df_curva_consolidado = pd.DataFrame()
 
@@ -309,7 +358,7 @@ if not df_curva_consolidado.empty:
                     x=df_marca_curva['Curva'], 
                     y=df_marca_curva['Custo Total'], 
                     name=nome_marca,
-                    marker_color=CORES_MARCAS.get(nome_marca, '#00f2fe')
+                    marker_color=CORES_MARCAS.get(nome_marca, '#007A33')
                 ))
         fig_custo.update_layout(barmode='stack')
     else:
@@ -317,7 +366,7 @@ if not df_curva_consolidado.empty:
         fig_custo.add_trace(go.Bar(
             x=df_curva_consolidado['Curva'], 
             y=df_curva_consolidado['Custo Total'], 
-            marker_color=[CORES_MARCAS.get(marca_selecionada, '#00f2fe')] * len(df_curva_consolidado),
+            marker_color=[CORES_MARCAS.get(marca_selecionada, '#007A33')] * len(df_curva_consolidado),
             text=[f"R$ {v:,.2f}" for v in df_curva_consolidado['Custo Total']],
             textposition='auto'
         ))
@@ -361,7 +410,7 @@ if not df_categoria_consolidado.empty:
                     x=df_marca_cat['Categoria'], 
                     y=df_marca_cat['Valor_Estoque_Atual'], 
                     name=nome_marca,
-                    marker_color=CORES_MARCAS.get(nome_marca, '#00f2fe')
+                    marker_color=CORES_MARCAS.get(nome_marca, '#007A33')
                 ))
         fig_categoria.update_layout(barmode='group')
     else:
@@ -371,7 +420,7 @@ if not df_categoria_consolidado.empty:
             x=df_categoria_consolidado['Categoria'], 
             y=df_categoria_consolidado['Valor_Estoque_Atual'], 
             name='Estoque Atual',
-            marker_color=CORES_MARCAS.get(marca_selecionada, '#00f2fe')
+            marker_color=CORES_MARCAS.get(marca_selecionada, '#007A33')
         ))
         fig_categoria.add_trace(go.Bar(
             x=df_categoria_consolidado['Categoria'], 
