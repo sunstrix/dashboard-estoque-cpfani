@@ -1,0 +1,157 @@
+import streamlit as st
+import pandas as pd
+import plotly.graph_objects as go
+from streamlit_gsheets import GSheetsConnection
+
+# 1. Configuração Inicial da Página (Visual Dark Mode)
+st.set_page_config(
+    page_title="Dashboard de Performance de Estoque NSF",
+    page_icon="📊",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# Estilização CSS para forçar o tema escuro premium
+st.markdown("""
+    <style>
+    .main { background-color: #0e1117; }
+    div[data-testid="stMetricValue"] { font-size: 28px; color: #00f2fe; }
+    div[data-testid="stMetricLabel"] { font-size: 14px; color: #a3b8cc; }
+    .stTabs [data-baseweb="tab"] { color: #a3b8cc; font-size: 16px; }
+    .stTabs [data-baseweb="tab"][aria-selected="true"] { color: #00f2fe; font-weight: bold; }
+    </style>
+""", unsafe_allowed_html=True)
+
+# SEU LINK OFICIAL CONFIGURADO AQUI:
+URL_PLANILHA = "https://docs.google.com/spreadsheets/d/1EDDyKie9UiugMLMowcPzHfViqzziFcSgxVPvZ2Rx3L0/edit?usp=sharing"
+
+# 2. Dicionário com os seus 17 PDVs reais (Substitua os nomes abaixo pelos oficiais se desejar)
+DE_PARA_LOJAS = {
+    4842: "4842 - Loja 4842",
+    5152: "5152 - Loja 5152",
+    6105: "6105 - Loja 6105",
+    6106: "6106 - Loja 6106",
+    6110: "6110 - Loja 6110",
+    8001: "8001 - Loja 8001",
+    11576: "11576 - Loja 11576",
+    12055: "12055 - Loja 12055",
+    12056: "12056 - Loja 12056",
+    12605: "12605 - Loja 12605",
+    12645: "12645 - Loja 12645",
+    14120: "14120 - Loja 14120",
+    14353: "14353 - Loja 14353",
+    20371: "20371 - Loja 20371",
+    21502: "21502 - Loja 21502",
+    23000: "23000 - Loja 23000",
+    23379: "23379 - Loja 23379"
+}
+
+# 3. Conexão direta com o Google Sheets via API do Streamlit
+@st.cache_data(ttl=3600)  # Atualiza o cache automaticamente a cada 1 hora
+def carregar_dados_nuvem(url):
+    marcas_dict = {}
+    abas = {'BOTICARIO': 'O Boticário 🟢', 'EUDORA': 'Eudora 🟣', 'QUEM_DISSE_BERENICE': 'Quem Disse, Berenice? 💖'}
+    
+    conn = st.connection("gsheets", type=GSheetsConnection)
+    
+    for aba_excel, nome_exibicao in abas.items():
+        try:
+            # Lê cada aba direto da nuvem
+            df = conn.read(spreadsheet=url, worksheet=aba_excel)
+            
+            # Garante que colunas críticas sejam numéricas
+            df['PDV'] = pd.to_numeric(df['PDV'], errors='coerce')
+            df['Estoque Atual'] = pd.to_numeric(df['Estoque Atual'], errors='coerce').fillna(0)
+            df['Preço tabela'] = pd.to_numeric(df['Preço tabela'], errors='coerce').fillna(0)
+            
+            # Regras de Estoque Mínimo por Curva
+            regras_minimo = {'A': 15, 'B': 10, 'C': 5, 'E': 2}
+            df['Estoque_Minimo_Qtd'] = df['Classe'].map(regras_minimo).fillna(2)
+            
+            # Cálculos Financeiros Dinâmicos
+            df['Valor_Estoque_Atual'] = df['Estoque Atual'] * df['Preço tabela']
+            df['Valor_Estoque_Minimo'] = df['Estoque_Minimo_Qtd'] * df['Preço tabela']
+            
+            df['Qtd_Excesso'] = (df['Estoque Atual'] - df['Estoque_Minimo_Qtd']).clip(lower=0)
+            df['Valor_Excesso'] = df['Qtd_Excesso'] * df['Preço tabela']
+            
+            df['Qtd_Falta'] = (df['Estoque_Minimo_Qtd'] - df['Estoque Atual']).clip(lower=0)
+            df['Valor_Falta'] = df['Qtd_Falta'] * df['Preço tabela']
+            
+            marcas_dict[nome_exibicao] = df
+        except Exception as e:
+            st.error(f"Erro ao ler a aba {aba_excel} na nuvem: {e}")
+            
+    return marcas_dict
+
+# Carregamento dos dados
+with st.spinner("Conectando ao Google Drive e atualizando estoques..."):
+    dados_marcas = carregar_dados_nuvem(URL_PLANILHA)
+
+# 4. Barra Lateral - Filtros
+st.sidebar.title("Filtros de Visão")
+primeira_marca = list(dados_marcas.keys())[0]
+todos_pdvs = sorted([int(x) for x in dados_marcas[primeira_marca]['PDV'].dropna().unique()])
+opcoes_selectbox = [DE_PARA_LOJAS.get(pdv, f"PDV {pdv}") for pdv in todos_pdvs]
+
+loja_selecionada_nome = st.sidebar.selectbox("Selecione a Loja / PDV:", opcoes_selectbox)
+pdv_selecionado = int(loja_selecionada_nome.split(" - ")[0])
+
+st.sidebar.markdown("---")
+if st.sidebar.button("🔄 Forçar Atualização dos Dados"):
+    st.cache_data.clear()
+    st.rerun()
+
+# 5. Corpo do Dashboard
+st.title("📊 Painel de Controle de Estoques e Ruptura")
+st.subheader(f"Análise Atualizada: {loja_selecionada_nome}")
+
+abas_tela = st.tabs(list(dados_marcas.keys()))
+
+for i, (nome_marca, df_completo) in enumerate(dados_marcas.items()):
+    with abas_tela[i]:
+        df_loja = df_completo[df_completo['PDV'] == pdv_selecionado]
+        
+        if df_loja.empty:
+            st.warning(f"Sem registros de movimentação para este PDV na marca {nome_marca}.")
+            continue
+            
+        # KPIs
+        v_estoque_atual = df_loja['Valor_Estoque_Atual'].sum()
+        v_estoque_min = df_loja['Valor_Estoque_Minimo'].sum()
+        v_excesso_total = df_loja['Valor_Excesso'].sum()
+        v_falta_total = df_loja['Valor_Falta'].sum()
+        
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("💰 Valor Estoque Atual", f"R$ {v_estoque_atual:,.2f}")
+        col2.metric("📉 Valor Estoque Mínimo", f"R$ {v_estoque_min:,.2f}")
+        col3.metric("⚠️ Capital Preso (Excesso)", f"R$ {v_excesso_total:,.2f}", delta=f"{((v_excesso_total/v_estoque_atual)*100 if v_estoque_atual > 0 else 0):.1f}% do estoque", delta_color="inverse")
+        col4.metric("🚨 Risco de Ruptura (Falta)", f"R$ {v_falta_total:,.2f}", delta="Abaixo do Mínimo", delta_color="off")
+        
+        st.markdown("---")
+        
+        # Gráfico
+        df_grafico = df_loja.groupby('Categoria')[['Valor_Estoque_Atual', 'Valor_Estoque_Minimo']].sum().reset_index()
+        fig = go.Figure()
+        fig.add_trace(go.Bar(x=df_grafico['Categoria'], y=df_grafico['Valor_Estoque_Atual'], name='Estoque Atual (R$)', marker_color='#00f2fe'))
+        fig.add_trace(go.Bar(x=df_grafico['Categoria'], y=df_grafico['Valor_Estoque_Minimo'], name='Estoque Mínimo (R$)', marker_color='#ff4b4b'))
+        fig.update_layout(barmode='group', template='plotly_dark', background_color='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', height=320)
+        st.plotly_chart(fig, use_container_width=True)
+        
+        st.markdown("---")
+        
+        # Tabelas
+        col_tab1, col_tab2 = st.columns(2)
+        with col_tab1:
+            st.write("### 🛑 Maiores Excessos Críticos (Dinheiro Parado)")
+            df_excesso_tabela = df_loja[df_loja['Valor_Excesso'] > 0][
+                ['SKU', 'Descrição', 'Classe', 'Estoque Atual', 'Estoque_Minimo_Qtd', 'Qtd_Excesso', 'Preço tabela', 'Valor_Excesso']
+            ].sort_values(by='Valor_Excesso', ascending=False)
+            st.dataframe(df_excesso_tabela.style.format({'Preço tabela': 'R$ {:.2f}', 'Valor_Excesso': 'R$ {:.2f}'}), use_container_width=True, height=280)
+            
+        with col_tab2:
+            st.write("### 🚨 Produtos Críticos em Falta / Ruptura")
+            df_falta_tabela = df_loja[df_loja['Valor_Falta'] > 0][
+                ['SKU', 'Descrição', 'Classe', 'Estoque Atual', 'Estoque_Minimo_Qtd', 'Qtd_Falta', 'Preço tabela', 'Valor_Falta']
+            ].sort_values(by='Valor_Falta', ascending=False)
+            st.dataframe(df_falta_tabela.style.format({'Preço tabela': 'R$ {:.2f}', 'Valor_Falta': 'R$ {:.2f}'}), use_container_width=True, height=280)
