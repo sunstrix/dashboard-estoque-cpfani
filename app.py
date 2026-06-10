@@ -27,25 +27,25 @@ SPREADSHEET_ID = "1PbNYsNPp6ShErx0U3Ml_dJpN-0MPwoxz"
 # URL de exportação direta em formato Excel (Método otimizado para planilhas públicas)
 URL_EXCEL = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/export?format=xlsx"
 
-# 2. Dicionário com os 17 PDVs reais
+# 2. Dicionário com os 17 PDVs reais (Nomes atualizados)
 DE_PARA_LOJAS = {
-    4842: "4842 - Loja 4842",
-    5152: "5152 - Loja 5152",
-    6105: "6105 - Loja 6105",
-    6106: "6106 - Loja 6106",
-    6110: "6110 - Loja 6110",
-    8001: "8001 - Loja 8001",
-    11576: "11576 - Loja 11576",
-    12055: "12055 - Loja 12055",
-    12056: "12056 - Loja 12056",
-    12605: "12605 - Loja 12605",
-    12645: "12645 - Loja 12645",
-    14120: "14120 - Loja 14120",
-    14353: "14353 - Loja 14353",
-    20371: "20371 - Loja 20371",
-    21502: "21502 - Loja 21502",
-    23000: "23000 - Loja 23000",
-    23379: "23379 - Loja 23379"
+    4842: "4842 - Metrópole",
+    5152: "5152 - Coração",
+    6105: "6105 - Assai Anchieta",
+    6106: "6106 - Direita",
+    6110: "6110 - Arouche",
+    8001: "8001 - Dom José",
+    11576: "11576 - Davó",
+    12055: "12055 - São Bento",
+    12056: "12056 - Marechal",
+    12605: "12605 - Coop",
+    12645: "12645 - Light",
+    14120: "14120 - VD SBC",
+    14353: "14353 - VD SP",
+    20371: "20371 - Luz",
+    21502: "21502 - Bem Barato",
+    23000: "23000 - Outlet",
+    23379: "23379 - Assai Piraporinha"
 }
 
 # 3. Conexão direta via engine do Excel (Otimizado para planilhas públicas)
@@ -137,8 +137,8 @@ for i, (nome_marca, df_completo) in enumerate(dados_marcas.items()):
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("💰 Valor Estoque Atual", f"R$ {v_estoque_atual:,.2f}")
         col2.metric("📉 Valor Estoque Mínimo", f"R$ {v_estoque_min:,.2f}")
-        col3.metric("⚠️ Capital Preso (Excesso)", f"R$ {v_excesso_total:,.2f}", delta=f"{((v_excesso_total/v_estoque_atual)*100 if v_estoque_atual > 0 else 0):.1f}% do estoque", delta_color="inverse")
-        col4.metric("🚨 Risco de Ruptura (Falta)", f"R$ {v_falta_total:,.2f}", delta="Abaixo do Mínimo", delta_color="off")
+        col3.metric("️ Capital Preso (Excesso)", f"R$ {v_excesso_total:,.2f}", delta=f"{((v_excesso_total/v_estoque_atual)*100 if v_estoque_atual > 0 else 0):.1f}% do estoque", delta_color="inverse")
+        col4.metric(" Risco de Ruptura (Falta)", f"R$ {v_falta_total:,.2f}", delta="Abaixo do Mínimo", delta_color="off")
         
         st.markdown("---")
         
