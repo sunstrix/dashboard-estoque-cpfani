@@ -5,6 +5,9 @@ from datetime import datetime, timezone, timedelta
 import openpyxl
 from io import BytesIO
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+import time
 
 # 1. Configuração Inicial da Página (Visual Tema O Boticário)
 st.set_page_config(
@@ -56,14 +59,13 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# ID OFICIAL DA PLANILHA PRINCIPAL EXTRAÍDO DO LINK FORNECIDO
-SPREADSHEET_ID = "1PbNYsNPp6ShErx0U3Ml_dJpN-0MPwoxz"
+# IDs OFICIAIS DAS PLANILHAS
+SPREADSHEET_ID_PRINCIPAL = "1EDDyKie9UiugMLMowcPzHfViqzziFcSgxVPvZ2Rx3L0"
+SPREADSHEET_ID_SEGURANCA = "1uHonFnFM4p7bz4s7YpewhKHNs6fSEfw9rDMTKC7jtHE"
 
-# URL de exportação direta em formato Excel (Método otimizado para planilhas públicas)
-URL_EXCEL = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/export?format=xlsx"
-
-# NOVA PLANILHA DE ESTOQUE DE SEGURANÇA
-URL_ESTOQUE_SEGURANCA = "https://docs.google.com/spreadsheets/d/1uHonFnFM4p7bz4s7YpewhKHNs6fSEfw9rDMTKC7jtHE/export?format=xlsx"
+# URLs de exportação direta em formato Excel
+URL_EXCEL = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID_PRINCIPAL}/export?format=xlsx"
+URL_ESTOQUE_SEGURANCA = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID_SEGURANCA}/export?format=xlsx"
 
 # 2. Dicionário com os 17 PDVs reais (Nomes atualizados)
 DE_PARA_LOJAS = {
@@ -114,6 +116,65 @@ CORES_MARCAS = {
     'Quem Disse, Berenice?': '#ff4b4b'
 }
 
+def criar_sessao_com_retry():
+    """
+    Cria uma sessão requests com retry automático para lidar com falhas de rede.
+    """
+    session = requests.Session()
+    retry = Retry(
+        total=3,
+        backoff_factor=1,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["GET"]
+    )
+    adapter = HTTPAdapter(max_retries=retry)
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    return session
+
+def download_arquivo_excel_com_retry(url, descricao="arquivo", timeout=60):
+    """
+    Faz download de arquivo Excel com retry automático e tratamento de erros.
+    Retorna BytesIO com o conteúdo ou None em caso de falha.
+    """
+    session = criar_sessao_com_retry()
+    
+    try:
+        with st.spinner(f"📥 Baixando {descricao}..."):
+            response = session.get(url, timeout=timeout, stream=True)
+            response.raise_for_status()
+            
+            # Verifica se o download foi completo
+            if 'content-length' in response.headers:
+                expected_size = int(response.headers['content-length'])
+                actual_size = len(response.content)
+                
+                if actual_size < expected_size:
+                    st.warning(f"⚠️ Download incompleto: {actual_size} de {expected_size} bytes. Tentando novamente...")
+                    time.sleep(2)
+                    # Tenta novamente
+                    response = session.get(url, timeout=timeout, stream=True)
+            
+            if response.status_code == 200 and len(response.content) > 0:
+                st.success(f"✅ {descricao.capitalize()} baixado com sucesso! ({len(response.content):,} bytes)")
+                return BytesIO(response.content)
+            else:
+                st.error(f"❌ Erro ao baixar {descricao}: Status {response.status_code}")
+                return None
+                
+    except requests.exceptions.Timeout:
+        st.error(f"⏱️ Timeout ao baixar {descricao}. Tente novamente.")
+        return None
+    except requests.exceptions.ConnectionError:
+        st.error(f"🔌 Erro de conexão ao baixar {descricao}. Verifique sua internet.")
+        return None
+    except requests.exceptions.RequestException as e:
+        st.error(f"❌ Erro ao baixar {descricao}: {str(e)[:200]}")
+        return None
+    except Exception as e:
+        st.error(f"❌ Erro inesperado ao baixar {descricao}: {str(e)[:200]}")
+        return None
+
 def exibir_titulo_marca(nome_marca, tamanho_logo=30):
     """
     Exibe o título de uma marca com sua logo usando st.columns + st.image.
@@ -148,9 +209,15 @@ def carregar_estoque_seguranca(url):
     
     Se o campo estiver em branco, considera como 0.
     """
+    # Faz download com retry
+    excel_buffer = download_arquivo_excel_com_retry(url, "planilha de estoque de segurança", timeout=90)
+    
+    if excel_buffer is None:
+        return pd.DataFrame()
+    
     try:
-        # Baixa o arquivo Excel da planilha de estoque de segurança
-        excel_file = pd.ExcelFile(url)
+        # Carrega o Excel
+        excel_file = pd.ExcelFile(excel_buffer)
         
         # Lista de abas esperadas
         abas_esperadas = ['BOT', 'EUD', 'QDB']
@@ -231,7 +298,7 @@ def carregar_estoque_seguranca(url):
             df_consolidado = pd.concat(dfs_abas, ignore_index=True)
             
             st.success(f"✅ Estoque de segurança carregado com sucesso!")
-            st.info(f"📊 Total de registros: {len(df_consolidado)} | Abas processadas: {', '.join(abas_encontradas)}")
+            st.info(f"📊 Total de registros: {len(df_consolidado):,} | Abas processadas: {', '.join(abas_encontradas)}")
             
             return df_consolidado
         else:
@@ -246,32 +313,34 @@ def obter_data_atualizacao_planilha(url_excel):
     """
     Tenta obter a data/hora da última atualização da planilha do Google Sheets.
     """
+    excel_buffer = download_arquivo_excel_com_retry(url_excel, "metadados da planilha", timeout=60)
+    
+    if excel_buffer is None:
+        return None
+    
     try:
-        # Baixa o arquivo Excel
-        response = requests.get(url_excel)
-        if response.status_code == 200:
-            # Carrega o workbook
-            excel_file = BytesIO(response.content)
-            workbook = openpyxl.load_workbook(excel_file)
+        # Carrega o workbook
+        workbook = openpyxl.load_workbook(excel_buffer, read_only=True, data_only=True)
+        
+        # Procura em todas as abas
+        for sheet_name in workbook.sheetnames:
+            sheet = workbook[sheet_name]
             
-            # Procura em todas as abas
-            for sheet_name in workbook.sheetnames:
-                sheet = workbook[sheet_name]
-                
-                # Procura células com nomes específicos
-                for row in sheet.iter_rows(min_row=1, max_row=10, max_col=5):
-                    for cell in row:
-                        if cell.value:
-                            valor_str = str(cell.value).strip().upper()
-                            if any(p in valor_str for p in ['/', ':', '202', '203']):
-                                if isinstance(cell.value, datetime):
-                                    return cell.value.strftime("%d/%m/%Y às %H:%M:%S")
-                                elif isinstance(cell.value, str):
-                                    return cell.value
-            
-            return None
-        else:
-            return None
+            # Procura células com nomes específicos
+            for row in sheet.iter_rows(min_row=1, max_row=10, max_col=5):
+                for cell in row:
+                    if cell.value:
+                        valor_str = str(cell.value).strip().upper()
+                        if any(p in valor_str for p in ['/', ':', '202', '203']):
+                            if isinstance(cell.value, datetime):
+                                workbook.close()
+                                return cell.value.strftime("%d/%m/%Y às %H:%M:%S")
+                            elif isinstance(cell.value, str):
+                                workbook.close()
+                                return cell.value
+        
+        workbook.close()
+        return None
     except Exception as e:
         st.warning(f"⚠️ Não foi possível ler metadados da planilha: {str(e)[:100]}")
         return None
@@ -292,83 +361,95 @@ def carregar_dados_nuvem(url_principal, url_seguranca):
         # Tenta obter a data de atualização da planilha
         data_atualizacao = obter_data_atualizacao_planilha(url_principal)
         
-        # Baixa o arquivo binário completo do Excel direto da nuvem
-        excel_file = pd.ExcelFile(url_principal)
+        # Faz download da planilha principal com retry
+        excel_buffer = download_arquivo_excel_com_retry(url_principal, "planilha principal de estoque", timeout=120)
         
-        for aba_excel, nome_exibicao in NOMES_MARCAS.items():
-            if aba_excel in excel_file.sheet_names:
-                df = pd.read_excel(excel_file, sheet_name=aba_excel)
-                
-                # Adiciona coluna de marca para identificação
-                df['Marca'] = nome_exibicao
-                
-                # Garante que colunas críticas sejam tratadas como números
-                df['PDV'] = pd.to_numeric(df['PDV'], errors='coerce')
-                df['Estoque Atual'] = pd.to_numeric(df['Estoque Atual'], errors='coerce').fillna(0)
-                df['Preço tabela'] = pd.to_numeric(df['Preço tabela'], errors='coerce').fillna(0)
-                
-                # Converte SKU para string para merge correto
-                df['SKU'] = df['SKU'].astype(str).str.strip()
-                
-                # UTILIZA PREÇO TABELA COMO BASE PARA CUSTO
-                df['Preço de Custo'] = df['Preço tabela']
-                
-                # MERGE com a planilha de estoque de segurança
-                if not df_estoque_seguranca.empty:
-                    # Filtra apenas os dados da marca correspondente
-                    df_seguranca_marca = df_estoque_seguranca[
-                        df_estoque_seguranca['MARCA_REFERENCIA'] == nome_exibicao
-                    ].copy()
+        if excel_buffer is None:
+            st.error("❌ Não foi possível carregar a planilha principal. Verifique a conexão com a internet.")
+            return {}, data_atualizacao
+        
+        try:
+            excel_file = pd.ExcelFile(excel_buffer)
+            
+            for aba_excel, nome_exibicao in NOMES_MARCAS.items():
+                if aba_excel in excel_file.sheet_names:
+                    df = pd.read_excel(excel_file, sheet_name=aba_excel)
                     
-                    if not df_seguranca_marca.empty:
-                        df = df.merge(
-                            df_seguranca_marca[['PDV', 'SKU', 'ESTOQUE_DE_SEGURANCA']], 
-                            on=['PDV', 'SKU'], 
-                            how='left'
-                        )
-                        # Se não encontrou no merge, usa 0
-                        df['Estoque_Minimo_Qtd'] = df['ESTOQUE_DE_SEGURANCA'].fillna(0)
-                        # Remove a coluna temporária
-                        df = df.drop(columns=['ESTOQUE_DE_SEGURANCA'])
+                    # Adiciona coluna de marca para identificação
+                    df['Marca'] = nome_exibicao
+                    
+                    # Garante que colunas críticas sejam tratadas como números
+                    df['PDV'] = pd.to_numeric(df['PDV'], errors='coerce')
+                    df['Estoque Atual'] = pd.to_numeric(df['Estoque Atual'], errors='coerce').fillna(0)
+                    df['Preço tabela'] = pd.to_numeric(df['Preço tabela'], errors='coerce').fillna(0)
+                    
+                    # Converte SKU para string para merge correto
+                    df['SKU'] = df['SKU'].astype(str).str.strip()
+                    
+                    # UTILIZA PREÇO TABELA COMO BASE PARA CUSTO
+                    df['Preço de Custo'] = df['Preço tabela']
+                    
+                    # MERGE com a planilha de estoque de segurança
+                    if not df_estoque_seguranca.empty:
+                        # Filtra apenas os dados da marca correspondente
+                        df_seguranca_marca = df_estoque_seguranca[
+                            df_estoque_seguranca['MARCA_REFERENCIA'] == nome_exibicao
+                        ].copy()
+                        
+                        if not df_seguranca_marca.empty:
+                            df = df.merge(
+                                df_seguranca_marca[['PDV', 'SKU', 'ESTOQUE_DE_SEGURANCA']], 
+                                on=['PDV', 'SKU'], 
+                                how='left'
+                            )
+                            # Se não encontrou no merge, usa 0
+                            df['Estoque_Minimo_Qtd'] = df['ESTOQUE_DE_SEGURANCA'].fillna(0)
+                            # Remove a coluna temporária
+                            df = df.drop(columns=['ESTOQUE_DE_SEGURANCA'])
+                        else:
+                            st.warning(f"⚠️ Nenhum dado de estoque de segurança encontrado para a marca {nome_exibicao}")
+                            # Usa regras padrão se não houver dados
+                            regras_minimo = {'A': 15, 'B': 10, 'C': 5, 'E': 2}
+                            df['Estoque_Minimo_Qtd'] = df['Classe'].map(regras_minimo).fillna(2)
                     else:
-                        st.warning(f"⚠️ Nenhum dado de estoque de segurança encontrado para a marca {nome_exibicao}")
-                        # Usa regras padrão se não houver dados
+                        # Se não tem planilha de segurança, usa regras padrão
                         regras_minimo = {'A': 15, 'B': 10, 'C': 5, 'E': 2}
                         df['Estoque_Minimo_Qtd'] = df['Classe'].map(regras_minimo).fillna(2)
+                    
+                    # Cálculos Financeiros Dinâmicos - Preço de Venda
+                    df['Valor_Estoque_Atual'] = df['Estoque Atual'] * df['Preço tabela']
+                    df['Valor_Estoque_Minimo'] = df['Estoque_Minimo_Qtd'] * df['Preço tabela']
+                    
+                    df['Qtd_Excesso'] = (df['Estoque Atual'] - df['Estoque_Minimo_Qtd']).clip(lower=0)
+                    df['Valor_Excesso'] = df['Qtd_Excesso'] * df['Preço tabela']
+                    
+                    df['Qtd_Falta'] = (df['Estoque_Minimo_Qtd'] - df['Estoque Atual']).clip(lower=0)
+                    df['Valor_Falta'] = df['Qtd_Falta'] * df['Preço tabela']
+                    
+                    # CÁLCULOS DE CUSTO - Baseado no Preço Tabela
+                    df['Valor_Custo_Estoque_Atual'] = df['Estoque Atual'] * df['Preço de Custo']
+                    df['Valor_Custo_Estoque_Minimo'] = df['Estoque_Minimo_Qtd'] * df['Preço de Custo']
+                    
+                    dicionario_marcas[nome_exibicao] = df
                 else:
-                    # Se não tem planilha de segurança, usa regras padrão
-                    regras_minimo = {'A': 15, 'B': 10, 'C': 5, 'E': 2}
-                    df['Estoque_Minimo_Qtd'] = df['Classe'].map(regras_minimo).fillna(2)
-                
-                # Cálculos Financeiros Dinâmicos - Preço de Venda
-                df['Valor_Estoque_Atual'] = df['Estoque Atual'] * df['Preço tabela']
-                df['Valor_Estoque_Minimo'] = df['Estoque_Minimo_Qtd'] * df['Preço tabela']
-                
-                df['Qtd_Excesso'] = (df['Estoque Atual'] - df['Estoque_Minimo_Qtd']).clip(lower=0)
-                df['Valor_Excesso'] = df['Qtd_Excesso'] * df['Preço tabela']
-                
-                df['Qtd_Falta'] = (df['Estoque_Minimo_Qtd'] - df['Estoque Atual']).clip(lower=0)
-                df['Valor_Falta'] = df['Qtd_Falta'] * df['Preço tabela']
-                
-                # CÁLCULOS DE CUSTO - Baseado no Preço Tabela
-                df['Valor_Custo_Estoque_Atual'] = df['Estoque Atual'] * df['Preço de Custo']
-                df['Valor_Custo_Estoque_Minimo'] = df['Estoque_Minimo_Qtd'] * df['Preço de Custo']
-                
-                dicionario_marcas[nome_exibicao] = df
-            else:
-                st.error(f"Aba {aba_excel} não encontrada no arquivo do Drive.")
+                    st.error(f"Aba {aba_excel} não encontrada no arquivo do Drive.")
+        except Exception as e:
+            st.error(f"Erro ao processar planilha principal: {str(e)}")
+            return {}, data_atualizacao
+            
     except Exception as e:
         st.error(f"Erro ao conectar ou ler o arquivo do Google Drive: {e}")
         
     return dicionario_marcas, data_atualizacao
 
 # Carregamento dos dados e captura do horário de Brasília
-with st.spinner("Conectando ao Google Drive e processando bases..."):
+with st.spinner("🔄 Conectando ao Google Drive e processando bases..."):
     dados_marcas, data_atualizacao_planilha = carregar_dados_nuvem(URL_EXCEL, URL_ESTOQUE_SEGURANCA)
     horario_carregamento = obter_horario_brasilia()
 
 if not dados_marcas:
-    st.error("Nenhum dado foi carregado. Verifique as permissões de compartilhamento da planilha.")
+    st.error("❌ Nenhum dado foi carregado. Verifique as permissões de compartilhamento da planilha e sua conexão com a internet.")
+    st.info("💡 **Dicas:**\n- Certifique-se de que as planilhas estão públicas\n- Verifique sua conexão com a internet\n- Tente clicar em 'Forçar Atualização dos Dados'")
     st.stop()
 
 # Determina qual data/hora exibir
