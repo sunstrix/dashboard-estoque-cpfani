@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 # 1. Configuração Inicial da Página (Visual Tema O Boticário)
 st.set_page_config(
@@ -115,16 +115,21 @@ CORES_MARCAS = {
 def exibir_marca_com_logo(nome_marca, tamanho_logo=22):
     """
     Retorna uma string HTML com a logo da marca seguida do nome.
-    Usado para exibir marcas de forma visualmente rica no dashboard.
+    Usado para exibir marcas de forma visualmente rica em elementos markdown.
     """
     logo_path = LOGOS_MARCAS.get(nome_marca, '')
     if logo_path:
         return f"<span class='marca-logo'><img src='{logo_path}' width='{tamanho_logo}' height='{tamanho_logo}'> {nome_marca}</span>"
     return nome_marca
 
-def nome_marca_simples(nome_marca):
-    """Retorna o nome da marca sem formatação HTML (para gráficos e dados)."""
-    return nome_marca
+def obter_horario_brasilia():
+    """
+    Retorna o horário atual no fuso horário de Brasília (UTC-3).
+    Funciona corretamente mesmo em servidores UTC (como Streamlit Cloud).
+    """
+    fuso_brasilia = timezone(timedelta(hours=-3))
+    agora_brasilia = datetime.now(fuso_brasilia)
+    return agora_brasilia.strftime("%d/%m/%Y às %H:%M:%S")
 
 # 3. Conexão direta via engine do Excel (Otimizado para planilhas públicas)
 @st.cache_data(ttl=3600)  # Limpa o cache automaticamente a cada 1 hora
@@ -176,10 +181,10 @@ def carregar_dados_nuvem(url):
         
     return dicionario_marcas
 
-# Carregamento dos dados e captura do horário de atualização
+# Carregamento dos dados e captura do horário de Brasília
 with st.spinner("Conectando ao Google Drive e processando bases..."):
     dados_marcas = carregar_dados_nuvem(URL_EXCEL)
-    horario_atualizacao = datetime.now().strftime("%d/%m/%Y às %H:%M:%S")
+    horario_atualizacao = obter_horario_brasilia()
 
 if not dados_marcas:
     st.error("Nenhum dado foi carregado. Verifique as permissões de compartilhamento da planilha.")
@@ -198,7 +203,7 @@ with col_logo:
 
 with col_info:
     st.title("📊 Painel de Controle de Estoques e Ruptura")
-    st.caption(f"🕒 Última atualização da base: **{horario_atualizacao}** | Fonte: Google Sheets")
+    st.caption(f"🕒 Última atualização da base: **{horario_atualizacao}** (Horário de Brasília) | Fonte: Google Sheets")
 
 st.markdown("---")
 
@@ -230,7 +235,7 @@ indice_selecionado = st.sidebar.selectbox(
 marca_selecionada = opcoes_marca_valor[indice_selecionado]
 
 st.sidebar.markdown("---")
-if st.sidebar.button("🔄 Forçar Atualização dos Dados"):
+if st.sidebar.button(" Forçar Atualização dos Dados"):
     st.cache_data.clear()
     st.rerun()
 
@@ -271,10 +276,10 @@ for nome_marca, df_completo in dados_filtrados.items():
         qtd_itens_total += df_loja['Estoque Atual'].sum()
 
 col1, col2, col3, col4 = st.columns(4)
-col1.metric(" Valor Estoque Atual (Venda)", f"R$ {v_estoque_atual_total:,.2f}")
-col2.metric("📉 Valor Estoque Mínimo (Venda)", f"R$ {v_estoque_min_total:,.2f}")
+col1.metric("💰 Valor Estoque Atual (Venda)", f"R$ {v_estoque_atual_total:,.2f}")
+col2.metric(" Valor Estoque Mínimo (Venda)", f"R$ {v_estoque_min_total:,.2f}")
 col3.metric("⚠️ Capital Preso (Excesso)", f"R$ {v_excesso_total_total:,.2f}", delta=f"{((v_excesso_total_total/v_estoque_atual_total)*100 if v_estoque_atual_total > 0 else 0):.1f}% do estoque", delta_color="inverse")
-col4.metric("🚨 Risco de Ruptura (Falta)", f"R$ {v_falta_total_total:,.2f}", delta="Abaixo do Mínimo", delta_color="off")
+col4.metric(" Risco de Ruptura (Falta)", f"R$ {v_falta_total_total:,.2f}", delta="Abaixo do Mínimo", delta_color="off")
 
 st.markdown("---")
 st.subheader("💵 Análise de Custos (Baseado no Preço Tabela)")
@@ -308,7 +313,7 @@ if marca_selecionada == "Todas as Marcas":
         with col_graf1:
             fig_qtd_marcas = go.Figure()
             fig_qtd_marcas.add_trace(go.Bar(
-                x=[exibir_marca_com_logo(m, tamanho_logo=25) for m in df_grafico_marcas['Marca']], 
+                x=df_grafico_marcas['Marca'], 
                 y=df_grafico_marcas['Qtd Itens'], 
                 name='Quantidade de Itens',
                 marker_color=[CORES_MARCAS.get(m, '#007A33') for m in df_grafico_marcas['Marca']],
@@ -328,7 +333,7 @@ if marca_selecionada == "Todas as Marcas":
         with col_graf2:
             fig_custo_marcas = go.Figure()
             fig_custo_marcas.add_trace(go.Bar(
-                x=[exibir_marca_com_logo(m, tamanho_logo=25) for m in df_grafico_marcas['Marca']], 
+                x=df_grafico_marcas['Marca'], 
                 y=df_grafico_marcas['Custo Total'], 
                 name='Custo Total',
                 marker_color=[CORES_MARCAS.get(m, '#007A33') for m in df_grafico_marcas['Marca']],
@@ -527,7 +532,7 @@ for nome_marca, df_completo in dados_filtrados.items():
         st.dataframe(df_excesso_tabela.style.format({'Preço tabela': 'R$ {:.2f}', 'Valor_Excesso': 'R$ {:.2f}'}), use_container_width=True, height=280)
         
     with col_tab2:
-        st.write("###  Produtos Críticos em Falta / Ruptura")
+        st.write("### 🚨 Produtos Críticos em Falta / Ruptura")
         df_falta_tabela = df_loja[df_loja['Valor_Falta'] > 0][
             ['SKU', 'Descrição', 'Classe', 'Estoque Atual', 'Estoque_Minimo_Qtd', 'Qtd_Falta', 'Preço tabela', 'Valor_Falta']
         ].sort_values(by='Valor_Falta', ascending=False)
