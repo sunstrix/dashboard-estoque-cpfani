@@ -2,6 +2,9 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 from datetime import datetime, timezone, timedelta
+import openpyxl
+from io import BytesIO
+import requests
 
 # 1. Configuração Inicial da Página (Visual Tema O Boticário)
 st.set_page_config(
@@ -115,7 +118,7 @@ def exibir_titulo_marca(nome_marca, tamanho_logo=30):
             except Exception:
                 st.write("🏷️")
         else:
-            st.write("️")
+            st.write("🏷️")
     with col_nome:
         st.markdown(f"### {nome_marca}")
 
@@ -128,12 +131,76 @@ def obter_horario_brasilia():
     agora_brasilia = datetime.now(fuso_brasilia)
     return agora_brasilia.strftime("%d/%m/%Y às %H:%M:%S")
 
+def obter_data_atualizacao_planilha(url_excel):
+    """
+    Tenta obter a data/hora da última atualização da planilha do Google Sheets.
+    
+    Estratégia:
+    1. Baixa o arquivo Excel
+    2. Procura por células com nomes específicos que contenham a data de atualização
+    3. Se não encontrar, retorna None
+    
+    Para funcionar, a planilha deve ter uma célula com:
+    - Nome: "ÚLTIMA_ATUALIZACAO" ou "DATA_ATUALIZACAO" ou "DATA_MODIFICACAO"
+    - OU uma célula específica (ex: A1 da aba "INFO") com a data/hora
+    """
+    try:
+        # Baixa o arquivo Excel
+        response = requests.get(url_excel)
+        if response.status_code == 200:
+            # Carrega o workbook
+            excel_file = BytesIO(response.content)
+            workbook = openpyxl.load_workbook(excel_file)
+            
+            # Lista de nomes de células/abas para procurar
+            possibilidades = ['ÚLTIMA_ATUALIZACAO', 'DATA_ATUALIZACAO', 'DATA_MODIFICACAO', 
+                            'ULTIMA_ATUALIZACAO', 'ATUALIZACAO', 'DATA']
+            
+            # Procura em todas as abas
+            for sheet_name in workbook.sheetnames:
+                sheet = workbook[sheet_name]
+                
+                # Procura células com nomes específicos
+                for row in sheet.iter_rows(min_row=1, max_row=10, max_col=5):
+                    for cell in row:
+                        # Verifica se o valor da célula contém texto de data/hora
+                        if cell.value:
+                            valor_str = str(cell.value).strip().upper()
+                            # Verifica se parece ser uma data/hora
+                            if any(p in valor_str for p in ['/', ':', '202', '203']):
+                                # Tenta extrair data/hora
+                                if isinstance(cell.value, datetime):
+                                    return cell.value.strftime("%d/%m/%Y às %H:%M:%S")
+                                elif isinstance(cell.value, str):
+                                    return cell.value
+            
+            # Se não encontrou célula específica, verifica se há uma aba chamada "INFO" ou "METADADOS"
+            for sheet_name in ['INFO', 'METADADOS', 'CONFIG', 'DADOS_GERAIS']:
+                if sheet_name in workbook.sheetnames:
+                    sheet = workbook[sheet_name]
+                    # Verifica as primeiras células
+                    for row in sheet.iter_rows(min_row=1, max_row=5, max_col=2):
+                        for cell in row:
+                            if cell.value and isinstance(cell.value, datetime):
+                                return cell.value.strftime("%d/%m/%Y às %H:%M:%S")
+            
+            return None
+        else:
+            return None
+    except Exception as e:
+        st.warning(f"⚠️ Não foi possível ler metadados da planilha: {str(e)[:100]}")
+        return None
+
 # 3. Conexão direta via engine do Excel (Otimizado para planilhas públicas)
 @st.cache_data(ttl=3600)  # Limpa o cache automaticamente a cada 1 hora
 def carregar_dados_nuvem(url):
     dicionario_marcas = {}
+    data_atualizacao = None
     
     try:
+        # Tenta obter a data de atualização da planilha
+        data_atualizacao = obter_data_atualizacao_planilha(url)
+        
         # Baixa o arquivo binário completo do Excel direto da nuvem
         excel_file = pd.ExcelFile(url)
         
@@ -176,16 +243,24 @@ def carregar_dados_nuvem(url):
     except Exception as e:
         st.error(f"Erro ao conectar ou ler o arquivo do Google Drive: {e}")
         
-    return dicionario_marcas
+    return dicionario_marcas, data_atualizacao
 
 # Carregamento dos dados e captura do horário de Brasília
 with st.spinner("Conectando ao Google Drive e processando bases..."):
-    dados_marcas = carregar_dados_nuvem(URL_EXCEL)
-    horario_atualizacao = obter_horario_brasilia()
+    dados_marcas, data_atualizacao_planilha = carregar_dados_nuvem(URL_EXCEL)
+    horario_carregamento = obter_horario_brasilia()
 
 if not dados_marcas:
     st.error("Nenhum dado foi carregado. Verifique as permissões de compartilhamento da planilha.")
     st.stop()
+
+# Determina qual data/hora exibir
+if data_atualizacao_planilha:
+    horario_exibicao = data_atualizacao_planilha
+    info_timestamp = "🕒 Última atualização da planilha"
+else:
+    horario_exibicao = horario_carregamento
+    info_timestamp = "🕒 Horário de carregamento do dashboard"
 
 # ==========================================
 # CABEÇALHO COM LOGO CP FANI E TIMESTAMP
@@ -200,7 +275,10 @@ with col_logo:
 
 with col_info:
     st.title("📊 Painel de Controle de Estoques e Ruptura")
-    st.caption(f"🕒 Última atualização da base: **{horario_atualizacao}** (Horário de Brasília) | Fonte: Google Sheets")
+    st.caption(f"{info_timestamp}: **{horario_exibicao}** (Horário de Brasília) | Fonte: Google Sheets")
+    
+    if not data_atualizacao_planilha:
+        st.info("💡 **Dica:** Para exibir a data de atualização da planilha, adicione uma célula com a data/hora atual na planilha do Google Sheets (ex: célula A1 de uma aba chamada 'INFO').")
 
 st.markdown("---")
 
@@ -262,8 +340,6 @@ v_estoque_atual_total = 0
 v_estoque_min_total = 0
 v_excesso_total_total = 0
 v_falta_total_total = 0
-v_custo_estoque_atual_total = 0
-v_custo_estoque_min_total = 0
 qtd_itens_total = 0
 
 for nome_marca, df_completo in dados_filtrados.items():
@@ -273,21 +349,15 @@ for nome_marca, df_completo in dados_filtrados.items():
         v_estoque_min_total += df_loja['Valor_Estoque_Minimo'].sum()
         v_excesso_total_total += df_loja['Valor_Excesso'].sum()
         v_falta_total_total += df_loja['Valor_Falta'].sum()
-        v_custo_estoque_atual_total += df_loja['Valor_Custo_Estoque_Atual'].sum()
-        v_custo_estoque_min_total += df_loja['Valor_Custo_Estoque_Minimo'].sum()
         qtd_itens_total += df_loja['Estoque Atual'].sum()
 
 col1, col2, col3, col4 = st.columns(4)
-col1.metric(" Valor Estoque Atual (Venda)", f"R$ {v_estoque_atual_total:,.2f}")
-col2.metric("📉 Valor Estoque Mínimo (Venda)", f"R$ {v_estoque_min_total:,.2f}")
+col1.metric("💰 Valor Estoque Atual (Tabela de Preço)", f"R$ {v_estoque_atual_total:,.2f}")
+col2.metric("📉 Valor Estoque Mínimo (Tabela de Preço)", f"R$ {v_estoque_min_total:,.2f}")
 col3.metric("⚠️ Capital Preso (Excesso)", f"R$ {v_excesso_total_total:,.2f}", delta=f"{((v_excesso_total_total/v_estoque_atual_total)*100 if v_estoque_atual_total > 0 else 0):.1f}% do estoque", delta_color="inverse")
 col4.metric("🚨 Risco de Ruptura (Falta)", f"R$ {v_falta_total_total:,.2f}", delta="Abaixo do Mínimo", delta_color="off")
 
 st.markdown("---")
-st.subheader("💵 Análise de Custos (Baseado no Preço Tabela)")
-col5, col6 = st.columns(2)
-col5.metric("💵 Custo Total do Estoque Atual", f"R$ {v_custo_estoque_atual_total:,.2f}", help="Soma do preço de tabela de todos os produtos em estoque")
-col6.metric("💵 Custo Total do Estoque Mínimo", f"R$ {v_custo_estoque_min_total:,.2f}", help="Soma do preço de tabela do estoque mínimo necessário")
 
 # ==========================================
 # GRÁFICO COMPARATIVO POR MARCA (Quantidade de Itens + Custo Total)
