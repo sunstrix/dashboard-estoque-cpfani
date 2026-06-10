@@ -2,7 +2,7 @@
 
 Painel de controle interativo para análise de estoques e ruptura de produtos das marcas **O Boticário**, **Eudora** e **Quem Disse, Berenice?** em 17 PDVs (Pontos de Venda).
 
-Este dashboard fornece visualizações em tempo real dos níveis de estoque, identifica excessos críticos (capital parado) e produtos em risco de ruptura, permitindo tomadas de decisão rápidas e baseadas em dados.
+Este dashboard fornece visualizações em tempo real dos níveis de estoque, identifica excessos críticos e produtos em risco de ruptura, permitindo tomadas de decisão rápidas e baseadas em dados.
 
 ---
 
@@ -10,11 +10,16 @@ Este dashboard fornece visualizações em tempo real dos níveis de estoque, ide
 
 - ✅ **Análise por PDV**: Visualização individualizada para cada uma das 17 lojas
 - ✅ **KPIs Financeiros**: Valor de estoque atual, estoque mínimo, capital preso e risco de ruptura
-- ✅ **Gráficos Interativos**: Comparativo visual entre estoque atual e mínimo por categoria
+- ✅ **Custo Inteligente**: Regra automática que considera o maior valor entre preço de tabela e custo da planilha draft
+- ✅ **Estoque de Segurança**: Importado de planilha separada com 3 abas (BOT, EUD, QDB)
+- ✅ **Filtro de Excessos Críticos**: SKUs com estoque de segurança = 0 são automaticamente excluídos
+- ✅ **Gráficos Interativos**: Comparativo visual entre marcas, categorias e curvas de produtos
 - ✅ **Tabelas Detalhadas**: Listagem dos maiores excessos e produtos em falta
-- ✅ **Dados em Tempo Real**: Leitura direta da planilha do Google Sheets com cache de 1 hora
-- ✅ **Interface Premium**: Design moderno em modo escuro com visual profissional
-- ✅ **Filtros Dinâmicos**: Seleção rápida de loja/PDV para análise focada
+- ✅ **Dados em Tempo Real**: Leitura direta das planilhas do Google Sheets com cache de 1 hora
+- ✅ **Interface Premium**: Design moderno em modo escuro com tema O Boticário (verde + dourado)
+- ✅ **Filtros Dinâmicos**: Seleção rápida de loja/PDV e marca para análise focada
+- ✅ **Logos das Marcas**: Identificação visual com logos oficiais (Boticário, Eudora, QDB)
+- ✅ **Horário de Brasília**: Timestamp sempre exibido no fuso UTC-3
 
 ---
 
@@ -25,7 +30,8 @@ Este dashboard fornece visualizações em tempo real dos níveis de estoque, ide
 - **Pandas** - Manipulação e análise de dados
 - **Plotly** - Visualizações gráficas interativas
 - **OpenPyXL** - Leitura de arquivos Excel
-- **Google Sheets API** - Fonte de dados em nuvem
+- **Requests** - Download com retry automático de planilhas
+- **Google Sheets** - Fonte de dados em nuvem (3 planilhas integradas)
 
 ---
 
@@ -34,7 +40,7 @@ Este dashboard fornece visualizações em tempo real dos níveis de estoque, ide
 Antes de começar, certifique-se de ter:
 
 - Windows 10/11
-- Conexão com a internet (para acessar a planilha do Google Drive)
+- Conexão com a internet (para acessar as planilhas do Google Drive)
 - Navegador web moderno (Chrome, Edge, Firefox)
 
 **Nota:** O script de instalação automatizada (`instalar.bat`) cuidará de instalar o Python e todas as dependências necessárias.
@@ -67,49 +73,109 @@ Você deve ver o Python 3.11.8 e todas as bibliotecas listadas no `requirements.
 
 ---
 
-## 📊 Configuração da Planilha
+## 📊 Configuração das Planilhas
 
-O dashboard está configurado para ler dados de uma planilha pública do Google Sheets.
+O dashboard está integrado com **3 planilhas públicas** do Google Sheets:
 
-### Planilha Atual
+### 1. Planilha Principal de Estoque
 
-- **ID da Planilha**: `1PbNYsNPp6ShErx0U3Ml_dJpN-0MPwoxz`
-- **URL**: https://docs.google.com/spreadsheets/d/1PbNYsNPp6ShErx0U3Ml_dJpN-0MPwoxz/edit
+- **ID**: `1EDDyKie9UiugMLMowcPzHfViqzziFcSgxVPvZ2Rx3L0`
+- **URL**: https://docs.google.com/spreadsheets/d/1EDDyKie9UiugMLMowcPzHfViqzziFcSgxVPvZ2Rx3L0/edit
+- **Abas**: `BOTICARIO`, `EUDORA`, `QUEM_DISSE_BERENICE`
 
-### Estrutura da Planilha
+### 2. Planilha de Estoque de Segurança
 
-A planilha deve conter **3 abas** com os seguintes nomes exatos:
+- **ID**: `1uHonFnFM4p7bz4s7YpewhKHNs6fSEfw9rDMTKC7jtHE`
+- **URL**: https://docs.google.com/spreadsheets/d/1uHonFnFM4p7bz4s7YpewhKHNs6fSEfw9rDMTKC7jtHE/edit
+- **Abas**: `BOT` (O Boticário), `EUD` (Eudora), `QDB` (Quem Disse, Berenice?)
+- **Colunas obrigatórias**: `PDV`, `SKU`, `ESTOQUE DE SEGURANCA`
 
-1. **`BOTICARIO`** - Dados de O Boticário
-2. **`EUDORA`** - Dados de Eudora
-3. **`QUEM_DISSE_BERENICE`** - Dados de Quem Disse, Berenice?
+### 3. Planilha Draft de Custos
 
-### Colunas Obrigatórias em Cada Aba
+- **ID**: `11Z21gFvJ9pm2xSlF3IweC7xcYZwAZWrjcWDnRe5LexY`
+- **URL**: https://docs.google.com/spreadsheets/d/11Z21gFvJ9pm2xSlF3IweC7xcYZwAZWrjcWDnRe5LexY/edit
+- **Coluna de Custo**: Coluna J (ou coluna nomeada como "CUSTO")
+- **Colunas obrigatórias**: Loja (nome completo), SKU, Custo
 
-Cada aba deve conter as seguintes colunas (na ordem desejada):
+---
 
-| Coluna | Tipo | Descrição |
-|--------|------|-----------|
-| `PDV` | Numérico | Código do Ponto de Venda (ex: 4842, 5152, etc.) |
-| `SKU` | Texto | Código único do produto |
-| `Descrição` | Texto | Nome/descrição do produto |
-| `Categoria` | Texto | Categoria do produto (para agrupamento no gráfico) |
-| `Classe` | Texto | Classificação ABC (A, B, C ou E) |
-| `Estoque Atual` | Numérico | Quantidade atual em estoque |
-| `Preço tabela` | Numérico | Preço unitário do produto |
+## 💰 Regra de Custo Inteligente
 
-### Regras de Estoque Mínimo por Classe
+O dashboard aplica automaticamente a seguinte regra para determinar o **Preço de Custo** de cada SKU:
 
-O dashboard calcula automaticamente o estoque mínimo com base na classificação:
+| Situação | Preço de Tabela | Custo (Draft) | Resultado |
+|----------|-----------------|---------------|-----------|
+| Apenas Tabela | ✅ Tem valor | ❌ Vazio/0 | Usa Preço de Tabela |
+| Apenas Draft | ❌ Vazio/0 | ✅ Tem valor | Usa Custo da Draft |
+| Ambos | ✅ Tem valor | ✅ Tem valor | Usa o **MAIOR** valor |
+| Nenhum | ❌ Vazio/0 | ❌ Vazio/0 | Resultado = 0 |
 
-- **Classe A**: Mínimo de 15 unidades
-- **Classe B**: Mínimo de 10 unidades
-- **Classe C**: Mínimo de 5 unidades
-- **Classe E**: Mínimo de 2 unidades
+Esta regra garante que o custo considerado seja sempre o mais conservador (maior valor), evitando subavaliação do estoque.
 
-### Permissões da Planilha
+---
 
-Como a planilha é **pública**, não é necessária configuração de credenciais. Basta garantir que ela esteja compartilhada como "Qualquer pessoa com o link pode visualizar".
+## 🛡️ Regra de Excessos Críticos
+
+**Importante:** SKUs que possuem **Estoque de Segurança = 0** são automaticamente **excluídos** da lista de Excessos Críticos. Isso evita que produtos sem meta de estoque mínimo apareçam erroneamente como "excesso".
+
+---
+
+## 🏪 Mapeamento de PDVs
+
+O dashboard mapeia automaticamente os nomes completos das lojas da planilha draft para os códigos numéricos dos PDVs:
+
+| Código | Loja | Nome na Planilha Draft |
+|--------|------|------------------------|
+| 4842 | Metrópole | Loja: 4842 - N. S. F. COSMETICOS E PRESENTES LTDA |
+| 5152 | Coração | Loja: 5152 - N. S. F. COSMETICOS E PRESENTES LTDA |
+| 6105 | Assai Anchieta | Loja: 6105 - N. S. F. COSMETICOS E PRESENTES LTDA |
+| 6106 | Direita | Loja: 6106 - N. S. F. COSMETICOS E PRESENTES LTDA |
+| 6110 | Arouche | Loja: 6110 - N. S. F. COSMETICOS E PRESENTES LTDA |
+| 8001 | Dom José | Loja: 8001 - N. S. F. COSMETICOS E PRESENTES LTDA |
+| 11576 | Davó | Loja: 11576 - N. S. F. COSMETICOS E PRESENTES LTDA |
+| 12055 | São Bento | Loja: 12055 - N. S. F. COSMETICOS E PRESENTES LTDA |
+| 12056 | Marechal | Loja: 12056 - S. P. ARON COSMETICOS EPP |
+| 12605 | Coop | Loja: 12605 - N.S.F. COSMETICOS E PRESENTES LTDA. |
+| 12645 | Light | Loja: 12645 - N. S. F. COSMETICOS E PRESENTES LTDA |
+| 14120 | VD SBC | Loja: 14120 - ARPEL DISTRIBUIDORA DE COSMETICOS LTDA - EPP |
+| 14353 | VD SP | Loja: 14353 - ARPEL DISTRIBUIDORA DE COSMETICOS LTDA - EPP |
+| 20371 | Luz | Loja: 20371 - N. S. F. COSMÉTICOS E PRESENTES LTDA. |
+| 21502 | Bem Barato | Loja: 21502 - N. S. F. COSMETICOS E PRESENTES LTD |
+| 23000 | Outlet | Loja: 23000 - N. S. F. COSMETICOS E PRESENTES LTD |
+| 23379 | Assai Piraporinha | Loja: 23379 - N. S. F. COSMETICOS E PRESENTES LTD |
+
+---
+
+## 📁 Estrutura do Projeto
+
+```text
+dashboard-estoque-cpfani/
+│
+├── app.py                      # Arquivo principal do dashboard
+├── config.py                   # Configurações de conexão com Google Sheets
+├── requirements.txt            # Lista de dependências Python
+├── instalar.bat                # Script de instalação automatizada
+├── logo_cp_fani.png            # Logo principal CP Fani
+├── logo_boticario.png          # Logo O Boticário
+├── logo_eudora.png             # Logo Eudora
+├── logo_qdb.png                # Logo Quem Disse, Berenice?
+├── .env                        # Variáveis de ambiente (não versionado)
+├── .gitignore                  # Arquivos ignorados pelo Git
+├── README.md                   # Este arquivo de documentação
+└── instalar.log                # Log da instalação (gerado automaticamente)
+```
+
+---
+
+## 🎨 Identidade Visual
+
+O dashboard utiliza o tema **O Boticário** com as seguintes cores:
+
+- **Verde Principal**: `#007A33` (cor oficial O Boticário)
+- **Dourado**: `#D4AF37` (destaque para KPIs e títulos)
+- **Fundo Escuro**: `#0e1117` (modo escuro premium)
+- **Eudora**: `#a855f7` (roxo)
+- **Quem Disse, Berenice?**: `#ff4b4b` (vermelho)
 
 ---
 
@@ -139,42 +205,13 @@ pause
 
 ---
 
-## 📁 Estrutura do Projeto
-
-```text
-dashboard-estoque-cpfani/
-│
-├── app.py                      # Arquivo principal do dashboard
-├── config.py                   # Configurações de conexão com Google Sheets (para planilhas privadas)
-├── requirements.txt            # Lista de dependências Python
-├── instalar.bat                # Script de instalação automatizada
-├── .env                        # Variáveis de ambiente (não versionado)
-├── .gitignore                  # Arquivos ignorados pelo Git
-├── README.md                   # Este arquivo de documentação
-└── instalar.log                # Log da instalação (gerado automaticamente)
-```
-
----
-
 ## 🔒 Segurança e Privacidade
 
-- ✅ **Dados Sensíveis**: O arquivo `.env` (que pode conter caminhos de credenciais) está no `.gitignore` e nunca será versionado
-- ✅ **Credenciais do Google**: Arquivos como `credentials.json` e `service_account.json` são ignorados pelo Git
-- ✅ **Planilha Pública**: A planilha atual é pública, não exigindo autenticação
-- ✅ **Cache de Dados**: Os dados são cacheados por 1 hora para melhorar performance e reduzir requisições
-
-### Migrando para Planilha Privada
-
-Se você decidir usar uma planilha privada no futuro:
-
-1. Crie uma Conta de Serviço no Google Cloud Console
-2. Baixe o arquivo JSON de credenciais
-3. Compartilhe a planilha com o e-mail da Conta de Serviço (como Leitor ou Editor)
-4. Configure o caminho do arquivo JSON no `.env`:
-   ```env
-   GOOGLE_CREDENTIALS_PATH=caminho/para/seu/arquivo.json
-   ```
-5. O `config.py` já está preparado para essa configuração
+- ✅ **Dados Sensíveis**: O arquivo `.env` está no `.gitignore` e nunca será versionado
+- ✅ **Planilhas Públicas**: As planilhas atuais são públicas, não exigindo autenticação
+- ✅ **Cache de Dados**: Os dados são cacheados por 1 hora para melhorar performance
+- ✅ **Retry Automático**: Downloads com até 3 tentativas automáticas em caso de falha
+- ✅ **Tratamento de Erros**: Mensagens claras em caso de problemas de conexão
 
 ---
 
@@ -193,20 +230,21 @@ Para forçar uma atualização imediata:
 
 ### Erro: "Nenhum dado foi carregado"
 
-**Causa**: A planilha não está acessível ou as permissões estão incorretas.
+**Causa**: As planilhas não estão acessíveis ou as permissões estão incorretas.
 
 **Solução**:
-- Verifique se a planilha está compartilhada como pública
-- Confirme que o ID da planilha no `app.py` está correto
-- Teste a URL diretamente no navegador: `https://docs.google.com/spreadsheets/d/{ID}/export?format=xlsx`
+- Verifique se as 3 planilhas estão compartilhadas como públicas
+- Confirme que os IDs das planilhas no `app.py` estão corretos
+- Teste as URLs diretamente no navegador
 
 ### Erro: "Aba não encontrada"
 
-**Causa**: Os nomes das abas na planilha não correspondem aos esperados.
+**Causa**: Os nomes das abas nas planilhas não correspondem aos esperados.
 
 **Solução**:
-- Verifique se as abas estão nomeadas exatamente como: `BOTICARIO`, `EUDORA`, `QUEM_DISSE_BERENICE`
-- Os nomes são *case-sensitive* (diferenciam maiúsculas de minúsculas)
+- Planilha principal: `BOTICARIO`, `EUDORA`, `QUEM_DISSE_BERENICE`
+- Planilha de segurança: `BOT`, `EUD`, `QDB`
+- Os nomes são *case-insensitive* (não diferenciam maiúsculas de minúsculas)
 
 ### Erro: "Python não é reconhecido"
 
@@ -235,6 +273,13 @@ pip install -r requirements.txt
 streamlit run app.py --server.port 8502
 ```
 
+### Logos não aparecem
+
+**Causa**: Os arquivos de imagem não estão na raiz do projeto.
+
+**Solução**:
+- Certifique-se de que `logo_cp_fani.png`, `logo_boticario.png`, `logo_eudora.png` e `logo_qdb.png` estejam na pasta `Desktop\dashboard-estoque-cpfani\`
+
 ---
 
 ## 🤝 Como Contribuir
@@ -261,7 +306,7 @@ Para dúvidas, problemas ou sugestões:
 
 - **Desenvolvedor**: Alex Paulo
 - **Projeto**: Dashboard de Performance de Estoque NSF
-- **Versão**: 1.0.0
+- **Versão**: 2.0.0
 - **Última Atualização**: Junho de 2026
 
 ---
