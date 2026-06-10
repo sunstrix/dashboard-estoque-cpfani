@@ -140,39 +140,25 @@ def download_arquivo_excel_com_retry(url, descricao="arquivo", timeout=60):
     session = criar_sessao_com_retry()
     
     try:
-        with st.spinner(f"📥 Baixando {descricao}..."):
-            response = session.get(url, timeout=timeout, stream=True)
-            response.raise_for_status()
+        response = session.get(url, timeout=timeout, stream=True)
+        response.raise_for_status()
+        
+        # Verifica se o download foi completo
+        if 'content-length' in response.headers:
+            expected_size = int(response.headers['content-length'])
+            actual_size = len(response.content)
             
-            # Verifica se o download foi completo
-            if 'content-length' in response.headers:
-                expected_size = int(response.headers['content-length'])
-                actual_size = len(response.content)
-                
-                if actual_size < expected_size:
-                    st.warning(f"⚠️ Download incompleto: {actual_size} de {expected_size} bytes. Tentando novamente...")
-                    time.sleep(2)
-                    # Tenta novamente
-                    response = session.get(url, timeout=timeout, stream=True)
+            if actual_size < expected_size:
+                time.sleep(2)
+                # Tenta novamente
+                response = session.get(url, timeout=timeout, stream=True)
+        
+        if response.status_code == 200 and len(response.content) > 0:
+            return BytesIO(response.content)
+        else:
+            return None
             
-            if response.status_code == 200 and len(response.content) > 0:
-                st.success(f"✅ {descricao.capitalize()} baixado com sucesso! ({len(response.content):,} bytes)")
-                return BytesIO(response.content)
-            else:
-                st.error(f"❌ Erro ao baixar {descricao}: Status {response.status_code}")
-                return None
-                
-    except requests.exceptions.Timeout:
-        st.error(f"⏱️ Timeout ao baixar {descricao}. Tente novamente.")
-        return None
-    except requests.exceptions.ConnectionError:
-        st.error(f"🔌 Erro de conexão ao baixar {descricao}. Verifique sua internet.")
-        return None
-    except requests.exceptions.RequestException as e:
-        st.error(f"❌ Erro ao baixar {descricao}: {str(e)[:200]}")
-        return None
-    except Exception as e:
-        st.error(f"❌ Erro inesperado ao baixar {descricao}: {str(e)[:200]}")
+    except Exception:
         return None
 
 def exibir_titulo_marca(nome_marca, tamanho_logo=30):
@@ -227,8 +213,6 @@ def carregar_estoque_seguranca(url):
         abas_encontradas = [aba for aba in abas_esperadas if aba in abas_disponiveis]
         
         if not abas_encontradas:
-            st.warning(f"⚠️ Nenhuma das abas esperadas ({', '.join(abas_esperadas)}) foi encontrada na planilha de estoque de segurança.")
-            st.info(f"Abas disponíveis: {', '.join(excel_file.sheet_names)}")
             return pd.DataFrame()
         
         # Lista para armazenar DataFrames de cada aba
@@ -243,7 +227,6 @@ def carregar_estoque_seguranca(url):
                 df_abas = pd.read_excel(excel_file, sheet_name=aba_exata)
                 
                 if df_abas.empty:
-                    st.info(f"ℹ️ A aba {aba_nome} está vazia.")
                     continue
                 
                 # Normaliza nomes das colunas (remove espaços extras, converte para maiúsculo)
@@ -254,7 +237,6 @@ def carregar_estoque_seguranca(url):
                 colunas_faltantes = [col for col in colunas_necessarias if col not in df_abas.columns]
                 
                 if colunas_faltantes:
-                    st.warning(f"⚠️ Colunas faltantes na aba {aba_nome}: {', '.join(colunas_faltantes)}")
                     continue
                 
                 # Identifica a coluna de estoque de segurança (pode ter vários nomes)
@@ -268,7 +250,6 @@ def carregar_estoque_seguranca(url):
                         break
                 
                 if coluna_seguranca is None:
-                    st.warning(f"⚠️ Coluna de estoque de segurança não encontrada na aba {aba_nome}. Usando valor padrão 0.")
                     df_abas['ESTOQUE_DE_SEGURANCA'] = 0
                 else:
                     # Renomeia para padronizar
@@ -289,24 +270,17 @@ def carregar_estoque_seguranca(url):
                 
                 dfs_abas.append(df_abas)
                 
-            except Exception as e:
-                st.error(f"❌ Erro ao processar aba {aba_nome}: {str(e)}")
+            except Exception:
                 continue
         
         # Concatena todos os DataFrames das abas
         if dfs_abas:
             df_consolidado = pd.concat(dfs_abas, ignore_index=True)
-            
-            st.success(f"✅ Estoque de segurança carregado com sucesso!")
-            st.info(f"📊 Total de registros: {len(df_consolidado):,} | Abas processadas: {', '.join(abas_encontradas)}")
-            
             return df_consolidado
         else:
-            st.warning("⚠️ Nenhum dado válido foi encontrado nas abas da planilha de estoque de segurança.")
             return pd.DataFrame()
         
-    except Exception as e:
-        st.error(f"❌ Erro ao carregar planilha de estoque de segurança: {str(e)}")
+    except Exception:
         return pd.DataFrame()
 
 def obter_data_atualizacao_planilha(url_excel):
@@ -341,8 +315,7 @@ def obter_data_atualizacao_planilha(url_excel):
         
         workbook.close()
         return None
-    except Exception as e:
-        st.warning(f"⚠️ Não foi possível ler metadados da planilha: {str(e)[:100]}")
+    except Exception:
         return None
 
 # 3. Conexão direta via engine do Excel (Otimizado para planilhas públicas)
@@ -355,9 +328,6 @@ def carregar_dados_nuvem(url_principal, url_seguranca):
         # Carrega a planilha de estoque de segurança (TODAS as abas)
         df_estoque_seguranca = carregar_estoque_seguranca(url_seguranca)
         
-        if df_estoque_seguranca.empty:
-            st.warning("⚠️ Planilha de estoque de segurança está vazia ou não pôde ser carregada. Usando regras padrão.")
-        
         # Tenta obter a data de atualização da planilha
         data_atualizacao = obter_data_atualizacao_planilha(url_principal)
         
@@ -365,7 +335,6 @@ def carregar_dados_nuvem(url_principal, url_seguranca):
         excel_buffer = download_arquivo_excel_com_retry(url_principal, "planilha principal de estoque", timeout=120)
         
         if excel_buffer is None:
-            st.error("❌ Não foi possível carregar a planilha principal. Verifique a conexão com a internet.")
             return {}, data_atualizacao
         
         try:
@@ -407,7 +376,6 @@ def carregar_dados_nuvem(url_principal, url_seguranca):
                             # Remove a coluna temporária
                             df = df.drop(columns=['ESTOQUE_DE_SEGURANCA'])
                         else:
-                            st.warning(f"⚠️ Nenhum dado de estoque de segurança encontrado para a marca {nome_exibicao}")
                             # Usa regras padrão se não houver dados
                             regras_minimo = {'A': 15, 'B': 10, 'C': 5, 'E': 2}
                             df['Estoque_Minimo_Qtd'] = df['Classe'].map(regras_minimo).fillna(2)
@@ -431,25 +399,22 @@ def carregar_dados_nuvem(url_principal, url_seguranca):
                     df['Valor_Custo_Estoque_Minimo'] = df['Estoque_Minimo_Qtd'] * df['Preço de Custo']
                     
                     dicionario_marcas[nome_exibicao] = df
-                else:
-                    st.error(f"Aba {aba_excel} não encontrada no arquivo do Drive.")
-        except Exception as e:
-            st.error(f"Erro ao processar planilha principal: {str(e)}")
+                    
+        except Exception:
             return {}, data_atualizacao
             
-    except Exception as e:
-        st.error(f"Erro ao conectar ou ler o arquivo do Google Drive: {e}")
+    except Exception:
+        pass
         
     return dicionario_marcas, data_atualizacao
 
 # Carregamento dos dados e captura do horário de Brasília
-with st.spinner("🔄 Conectando ao Google Drive e processando bases..."):
+with st.spinner("Carregando dados..."):
     dados_marcas, data_atualizacao_planilha = carregar_dados_nuvem(URL_EXCEL, URL_ESTOQUE_SEGURANCA)
     horario_carregamento = obter_horario_brasilia()
 
 if not dados_marcas:
     st.error("❌ Nenhum dado foi carregado. Verifique as permissões de compartilhamento da planilha e sua conexão com a internet.")
-    st.info("💡 **Dicas:**\n- Certifique-se de que as planilhas estão públicas\n- Verifique sua conexão com a internet\n- Tente clicar em 'Forçar Atualização dos Dados'")
     st.stop()
 
 # Determina qual data/hora exibir
@@ -469,14 +434,11 @@ with col_logo:
     try:
         st.image("logo_cp_fani.png", width=180)
     except Exception:
-        st.warning("Logo CP Fani não encontrada. Certifique-se de que o arquivo 'logo_cp_fani.png' está na raiz do projeto.")
+        pass
 
 with col_info:
     st.title("📊 Painel de Controle de Estoques e Ruptura")
     st.caption(f"{info_timestamp}: **{horario_exibicao}** (Horário de Brasília) | Fonte: Google Sheets")
-    
-    if not data_atualizacao_planilha:
-        st.info("💡 **Dica:** Para exibir a data de atualização da planilha, adicione uma célula com a data/hora atual na planilha do Google Sheets (ex: célula A1 de uma aba chamada 'INFO').")
 
 st.markdown("---")
 
@@ -716,8 +678,6 @@ if not df_curva_consolidado.empty:
         title='Distribuição de Custo por Curva'
     )
     st.plotly_chart(fig_custo, use_container_width=True)
-else:
-    st.warning("Coluna 'Classe' não encontrada nos dados.")
 
 # ==========================================
 # ANÁLISE POR CATEGORIA
@@ -775,8 +735,6 @@ if not df_categoria_consolidado.empty:
         title='Estoque por Categoria'
     )
     st.plotly_chart(fig_categoria, use_container_width=True)
-else:
-    st.warning("Coluna 'Categoria' não encontrada nos dados.")
 
 # ==========================================
 # TABELAS DE EXCESSOS E FALTAS (POR MARCA)
@@ -787,7 +745,6 @@ for nome_marca, df_completo in dados_filtrados.items():
     df_loja = df_completo[df_completo['PDV'] == pdv_selecionado]
     
     if df_loja.empty:
-        st.warning(f"Sem registros de movimentação para este PDV na marca {nome_marca}.")
         continue
     
     # Título da marca com logo (usando st.columns + st.image)
@@ -798,21 +755,12 @@ for nome_marca, df_completo in dados_filtrados.items():
         st.write("### 🛑 Excessos Críticos")
         
         # FILTRO IMPORTANTE: Exclui SKUs com estoque de segurança = 0
-        # Primeiro verifica se tem excesso, depois filtra por estoque de segurança > 0
         df_excesso_tabela = df_loja[
             (df_loja['Valor_Excesso'] > 0) & 
             (df_loja['Estoque_Minimo_Qtd'] > 0)
         ][
             ['SKU', 'Descrição', 'Classe', 'Estoque Atual', 'Estoque_Minimo_Qtd', 'Qtd_Excesso', 'Preço tabela', 'Valor_Excesso']
         ].sort_values(by='Valor_Excesso', ascending=False)
-        
-        # Conta quantos foram excluídos
-        total_excessos_brutos = len(df_loja[df_loja['Valor_Excesso'] > 0])
-        total_excessos_filtrados = len(df_excesso_tabela)
-        total_excluidos = total_excessos_brutos - total_excessos_filtrados
-        
-        if total_excluidos > 0:
-            st.info(f"ℹ️ {total_excluidos} produto(s) com excesso foram excluídos por terem estoque de segurança = 0")
         
         st.dataframe(df_excesso_tabela.style.format({'Preço tabela': 'R$ {:.2f}', 'Valor_Excesso': 'R$ {:.2f}'}), use_container_width=True, height=280)
         
