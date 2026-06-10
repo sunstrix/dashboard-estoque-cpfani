@@ -1,10 +1,12 @@
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
+import gspread
+from config import obter_planilha
 
-# 1. Configuração Inicial da Página (Visual Dark Mode)
+# 1. Configuração Inicial da Página (Visual Modo Escuro)
 st.set_page_config(
-    page_title="Dashboard de Performance de Estoque NSF",
+    page_title="Painel de Performance de Estoque NSF",
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -21,13 +23,11 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# ID OFICIAL DA SUA PLANILHA EXTRAÍDO DO SEU LINK
+# ID OFICIAL DA PLANILHA EXTRAÍDO DO LINK
 SPREADSHEET_ID = "1EDDyKie9UiugMLMowcPzHfViqzziFcSgxVPvZ2Rx3L0"
+URL_PLANILHA = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}"
 
-# URL de exportação direta em formato Excel (Evita completamente erros de quebra de texto do CSV)
-URL_EXCEL = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/export?format=xlsx"
-
-# 2. Dicionário com os seus 17 PDVs reais
+# 2. Dicionário com os 17 PDVs reais
 DE_PARA_LOJAS = {
     4842: "4842 - Loja 4842",
     5152: "5152 - Loja 5152",
@@ -48,19 +48,26 @@ DE_PARA_LOJAS = {
     23379: "23379 - Loja 23379"
 }
 
-# 3. Conexão direta via engine do Excel
+# 3. Conexão via API do Google Sheets usando gspread
 @st.cache_data(ttl=3600)  # Limpa o cache automaticamente a cada 1 hora
-def carregar_dados_nuvem(url):
-    marcas_dict = {}
-    abas = {'BOTICARIO': 'O Boticário 🟢', 'EUDORA': 'Eudora 🟣', 'QUEM_DISSE_BERENICE': 'Quem Disse, Berenice? 💖'}
+def carregar_dados_google_sheets():
+    dicionario_marcas = {}
+    abas_planilha = {
+        'BOTICARIO': 'O Boticário 🟢', 
+        'EUDORA': 'Eudora 🟣', 
+        'QUEM_DISSE_BERENICE': 'Quem Disse, Berenice? 💖'
+    }
     
     try:
-        # Baixa o arquivo binário completo do Excel direto da nuvem
-        excel_file = pd.ExcelFile(url)
+        # Abre a planilha usando a URL e a configuração segura do config.py
+        planilha = obter_planilha(URL_PLANILHA)
         
-        for aba_excel, nome_exibicao in abas.items():
-            if aba_excel in excel_file.sheet_names:
-                df = pd.read_excel(excel_file, sheet_name=aba_excel)
+        for aba_excel, nome_exibicao in abas_planilha.items():
+            try:
+                # Acessa a aba específica e obtém todos os registros como lista de dicionários
+                worksheet = planilha.worksheet(aba_excel)
+                dados = worksheet.get_all_records()
+                df = pd.DataFrame(dados)
                 
                 # Garante que colunas críticas sejam tratadas como números
                 df['PDV'] = pd.to_numeric(df['PDV'], errors='coerce')
@@ -81,24 +88,28 @@ def carregar_dados_nuvem(url):
                 df['Qtd_Falta'] = (df['Estoque_Minimo_Qtd'] - df['Estoque Atual']).clip(lower=0)
                 df['Valor_Falta'] = df['Qtd_Falta'] * df['Preço tabela']
                 
-                marcas_dict[nome_exibicao] = df
-            else:
-                st.error(f"Aba {aba_excel} não encontrada no arquivo do Drive.")
+                dicionario_marcas[nome_exibicao] = df
+                
+            except gspread.exceptions.WorksheetNotFound:
+                st.error(f"Aba '{aba_excel}' não encontrada na planilha do Google Drive.")
+            except Exception as e:
+                st.error(f"Erro ao processar a aba '{aba_excel}': {e}")
+                
     except Exception as e:
-        st.error(f"Erro ao conectar ou ler o arquivo do Google Drive: {e}")
+        st.error(f"Erro ao conectar ou ler a planilha do Google Drive: {e}")
         
-    return marcas_dict
+    return dicionario_marcas
 
 # Carregamento dos dados
 with st.spinner("Conectando ao Google Drive e processando bases..."):
-    dados_marcas = carregar_dados_nuvem(URL_EXCEL)
+    dados_marcas = carregar_dados_google_sheets()
 
 if not dados_marcas:
-    st.error("Nenhum dado foi carregado. Verifique as permissões de compartilhamento da planilha.")
+    st.error("Nenhum dado foi carregado. Verifique se o e-mail da Conta de Serviço (presente no arquivo de credenciais) foi adicionado como 'Leitor' ou 'Editor' na planilha do Google Drive.")
     st.stop()
 
 # 4. Barra Lateral - Filtros
-st.sidebar.title("Filtros de Visão")
+st.sidebar.title("Filtros de Visualização")
 primeira_marca = list(dados_marcas.keys())[0]
 
 # Extração limpa e segura dos códigos de PDV únicos
@@ -114,7 +125,7 @@ if st.sidebar.button("🔄 Forçar Atualização dos Dados"):
     st.cache_data.clear()
     st.rerun()
 
-# 5. Corpo do Dashboard
+# 5. Corpo do Painel
 st.title("📊 Painel de Controle de Estoques e Ruptura")
 st.subheader(f"Análise Atualizada: {loja_selecionada_nome}")
 
