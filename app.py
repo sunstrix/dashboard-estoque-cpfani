@@ -1,8 +1,6 @@
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
-import gspread
-from config import obter_planilha
 
 # 1. Configuração Inicial da Página (Visual Modo Escuro)
 st.set_page_config(
@@ -23,9 +21,11 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# ID OFICIAL DA PLANILHA EXTRAÍDO DO LINK
-SPREADSHEET_ID = "1EDDyKie9UiugMLMowcPzHfViqzziFcSgxVPvZ2Rx3L0"
-URL_PLANILHA = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}"
+# ID OFICIAL DA PLANILHA EXTRAÍDO DO LINK FORNECIDO
+SPREADSHEET_ID = "1PbNYsNPp6ShErx0U3Ml_dJpN-0MPwoxz"
+
+# URL de exportação direta em formato Excel (Método otimizado para planilhas públicas)
+URL_EXCEL = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/export?format=xlsx"
 
 # 2. Dicionário com os 17 PDVs reais
 DE_PARA_LOJAS = {
@@ -48,26 +48,19 @@ DE_PARA_LOJAS = {
     23379: "23379 - Loja 23379"
 }
 
-# 3. Conexão via API do Google Sheets usando gspread
+# 3. Conexão direta via engine do Excel (Otimizado para planilhas públicas)
 @st.cache_data(ttl=3600)  # Limpa o cache automaticamente a cada 1 hora
-def carregar_dados_google_sheets():
+def carregar_dados_nuvem(url):
     dicionario_marcas = {}
-    abas_planilha = {
-        'BOTICARIO': 'O Boticário 🟢', 
-        'EUDORA': 'Eudora 🟣', 
-        'QUEM_DISSE_BERENICE': 'Quem Disse, Berenice? 💖'
-    }
+    abas = {'BOTICARIO': 'O Boticário 🟢', 'EUDORA': 'Eudora 🟣', 'QUEM_DISSE_BERENICE': 'Quem Disse, Berenice? 💖'}
     
     try:
-        # Abre a planilha usando a URL e a configuração segura do config.py
-        planilha = obter_planilha(URL_PLANILHA)
+        # Baixa o arquivo binário completo do Excel direto da nuvem
+        excel_file = pd.ExcelFile(url)
         
-        for aba_excel, nome_exibicao in abas_planilha.items():
-            try:
-                # Acessa a aba específica e obtém todos os registros como lista de dicionários
-                worksheet = planilha.worksheet(aba_excel)
-                dados = worksheet.get_all_records()
-                df = pd.DataFrame(dados)
+        for aba_excel, nome_exibicao in abas.items():
+            if aba_excel in excel_file.sheet_names:
+                df = pd.read_excel(excel_file, sheet_name=aba_excel)
                 
                 # Garante que colunas críticas sejam tratadas como números
                 df['PDV'] = pd.to_numeric(df['PDV'], errors='coerce')
@@ -89,23 +82,19 @@ def carregar_dados_google_sheets():
                 df['Valor_Falta'] = df['Qtd_Falta'] * df['Preço tabela']
                 
                 dicionario_marcas[nome_exibicao] = df
-                
-            except gspread.exceptions.WorksheetNotFound:
-                st.error(f"Aba '{aba_excel}' não encontrada na planilha do Google Drive.")
-            except Exception as e:
-                st.error(f"Erro ao processar a aba '{aba_excel}': {e}")
-                
+            else:
+                st.error(f"Aba {aba_excel} não encontrada no arquivo do Drive.")
     except Exception as e:
-        st.error(f"Erro ao conectar ou ler a planilha do Google Drive: {e}")
+        st.error(f"Erro ao conectar ou ler o arquivo do Google Drive: {e}")
         
     return dicionario_marcas
 
 # Carregamento dos dados
 with st.spinner("Conectando ao Google Drive e processando bases..."):
-    dados_marcas = carregar_dados_google_sheets()
+    dados_marcas = carregar_dados_nuvem(URL_EXCEL)
 
 if not dados_marcas:
-    st.error("Nenhum dado foi carregado. Verifique se o e-mail da Conta de Serviço (presente no arquivo de credenciais) foi adicionado como 'Leitor' ou 'Editor' na planilha do Google Drive.")
+    st.error("Nenhum dado foi carregado. Verifique as permissões de compartilhamento da planilha.")
     st.stop()
 
 # 4. Barra Lateral - Filtros
