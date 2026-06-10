@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 # 1. Configuração Inicial da Página (Visual Modo Escuro)
 st.set_page_config(
@@ -52,11 +53,19 @@ DE_PARA_LOJAS = {
 @st.cache_data(ttl=3600)  # Limpa o cache automaticamente a cada 1 hora
 def carregar_dados_nuvem(url):
     dicionario_marcas = {}
+    dados_acompanhamento = None
     abas = {'BOTICARIO': 'O Boticário 🟢', 'EUDORA': 'Eudora 🟣', 'QUEM_DISSE_BERENICE': 'Quem Disse, Berenice? 💖'}
     
     try:
         # Baixa o arquivo binário completo do Excel direto da nuvem
         excel_file = pd.ExcelFile(url)
+        
+        # Carrega aba de acompanhamento mensal (se existir)
+        if 'ACOMPANHAMENTO' in excel_file.sheet_names:
+            try:
+                dados_acompanhamento = pd.read_excel(excel_file, sheet_name='ACOMPANHAMENTO')
+            except Exception as e:
+                st.warning(f"Erro ao carregar aba ACOMPANHAMENTO: {e}")
         
         for aba_excel, nome_exibicao in abas.items():
             if aba_excel in excel_file.sheet_names:
@@ -68,7 +77,6 @@ def carregar_dados_nuvem(url):
                 df['Preço tabela'] = pd.to_numeric(df['Preço tabela'], errors='coerce').fillna(0)
                 
                 # UTILIZA PREÇO TABELA COMO BASE PARA CUSTO
-                # Como não há coluna de custo separada, usamos o preço de tabela
                 df['Preço de Custo'] = df['Preço tabela']
                 
                 # Regras de Estoque Mínimo por Curva
@@ -95,11 +103,11 @@ def carregar_dados_nuvem(url):
     except Exception as e:
         st.error(f"Erro ao conectar ou ler o arquivo do Google Drive: {e}")
         
-    return dicionario_marcas
+    return dicionario_marcas, dados_acompanhamento
 
 # Carregamento dos dados
 with st.spinner("Conectando ao Google Drive e processando bases..."):
-    dados_marcas = carregar_dados_nuvem(URL_EXCEL)
+    dados_marcas, dados_acompanhamento = carregar_dados_nuvem(URL_EXCEL)
 
 if not dados_marcas:
     st.error("Nenhum dado foi carregado. Verifique as permissões de compartilhamento da planilha.")
@@ -122,14 +130,185 @@ if st.sidebar.button("🔄 Forçar Atualização dos Dados"):
     st.cache_data.clear()
     st.rerun()
 
-# 5. Corpo do Painel
-st.title("📊 Painel de Controle de Estoques e Ruptura")
+# 5. Corpo do Painel - Abas Principais
+st.title(" Painel de Controle de Estoques e Ruptura")
 st.subheader(f"Análise Atualizada: {loja_selecionada_nome}")
 
-abas_tela = st.tabs(list(dados_marcas.keys()))
+# Cria abas principais: Acompanhamento Mensal + Marcas
+abas_principais = st.tabs(["📅 Acompanhamento Mensal"] + list(dados_marcas.keys()))
 
+# ==========================================
+# ABA 1: ACOMPANHAMENTO MENSAL
+# ==========================================
+with abas_principais[0]:
+    st.header("📅 Acompanhamento Mensal de Estoque e Cobertura")
+    
+    if dados_acompanhamento is not None and not dados_acompanhamento.empty:
+        # Filtra dados pelo PDV selecionado (se houver coluna PDV)
+        if 'PDV' in dados_acompanhamento.columns:
+            df_acomp = dados_acompanhamento[dados_acompanhamento['PDV'] == pdv_selecionado].copy()
+        else:
+            df_acomp = dados_acompanhamento.copy()
+        
+        if df_acomp.empty:
+            st.warning(f"Sem dados de acompanhamento para o PDV {pdv_selecionado}.")
+        else:
+            # KPIs de Resumo
+            st.subheader(" Resumo Geral")
+            
+            # Calcula totais se houver colunas relevantes
+            colunas_numericas = ['RL', 'CMV_R$', 'Estoque_Ideal', 'Compras_Mês']
+            metricas_disponiveis = [col for col in colunas_numericas if col in df_acomp.columns]
+            
+            if metricas_disponiveis:
+                cols_kpi = st.columns(len(metricas_disponiveis))
+                for idx, col in enumerate(metricas_disponiveis):
+                    total_valor = df_acomp[col].sum()
+                    cols_kpi[idx].metric(f"Total {col}", f"R$ {total_valor:,.2f}")
+            
+            st.markdown("---")
+            
+            # Tabela de Evolução Mensal
+            st.subheader("📋 Evolução Mensal Detalhada")
+            
+            # Seleciona colunas para exibição (prioriza as mais importantes)
+            colunas_exibicao = ['Ano', 'Mês', 'Status', 'RL', 'CMV%', 'CMV_R$', 'COB_INI', 'COB_FIM', 'COB_IDEAL', 'Estoque_Ideal']
+            colunas_existentes = [col for col in colunas_exibicao if col in df_acomp.columns]
+            
+            if colunas_existentes:
+                df_exibicao = df_acomp[colunas_existentes].copy()
+                
+                # Formata valores monetários
+                colunas_moeda = ['RL', 'CMV_R$', 'Estoque_Ideal']
+                for col in colunas_moeda:
+                    if col in df_exibicao.columns:
+                        df_exibicao[col] = df_exibicao[col].apply(lambda x: f"R$ {x:,.2f}" if pd.notna(x) else "-")
+                
+                # Formata porcentagem
+                if 'CMV%' in df_exibicao.columns:
+                    df_exibicao['CMV%'] = df_exibicao['CMV%'].apply(lambda x: f"{x:.1f}%" if pd.notna(x) else "-")
+                
+                # Formata cobertura
+                colunas_cobertura = ['COB_INI', 'COB_FIM', 'COB_IDEAL']
+                for col in colunas_cobertura:
+                    if col in df_exibicao.columns:
+                        df_exibicao[col] = df_exibicao[col].apply(lambda x: f"{x:.0f}" if pd.notna(x) else "-")
+                
+                st.dataframe(df_exibicao, use_container_width=True, height=400)
+            else:
+                st.info("Nenhuma coluna padrão encontrada na aba ACOMPANHAMENTO.")
+            
+            st.markdown("---")
+            
+            # Gráfico de Evolução de Cobertura
+            if 'COB_INI' in df_acomp.columns and 'COB_FIM' in df_acomp.columns:
+                st.subheader("📈 Evolução da Cobertura de Estoque")
+                
+                # Cria coluna de período para o eixo X
+                if 'Ano' in df_acomp.columns and 'Mês' in df_acomp.columns:
+                    df_acomp['Periodo'] = df_acomp['Ano'].astype(str) + ' - ' + df_acomp['Mês'].astype(str)
+                else:
+                    df_acomp['Periodo'] = range(len(df_acomp))
+                
+                fig_cobertura = go.Figure()
+                
+                if 'COB_INI' in df_acomp.columns:
+                    fig_cobertura.add_trace(go.Scatter(
+                        x=df_acomp['Periodo'], 
+                        y=df_acomp['COB_INI'], 
+                        mode='lines+markers',
+                        name='Cobertura Inicial',
+                        line=dict(color='#00f2fe', width=2),
+                        marker=dict(size=8)
+                    ))
+                
+                if 'COB_FIM' in df_acomp.columns:
+                    fig_cobertura.add_trace(go.Scatter(
+                        x=df_acomp['Periodo'], 
+                        y=df_acomp['COB_FIM'], 
+                        mode='lines+markers',
+                        name='Cobertura Final',
+                        line=dict(color='#ff4b4b', width=2),
+                        marker=dict(size=8)
+                    ))
+                
+                if 'COB_IDEAL' in df_acomp.columns:
+                    fig_cobertura.add_trace(go.Scatter(
+                        x=df_acomp['Periodo'], 
+                        y=df_acomp['COB_IDEAL'], 
+                        mode='lines',
+                        name='Cobertura Ideal',
+                        line=dict(color='#ffa500', width=2, dash='dash')
+                    ))
+                
+                fig_cobertura.update_layout(
+                    template='plotly_dark',
+                    plot_bgcolor='rgba(0,0,0,0)',
+                    paper_bgcolor='rgba(0,0,0,0)',
+                    height=400,
+                    xaxis_title='Período',
+                    yaxis_title='Cobertura (dias)',
+                    hovermode='x unified'
+                )
+                
+                st.plotly_chart(fig_cobertura, use_container_width=True)
+            
+            st.markdown("---")
+            
+            # Gráfico de RL e CMV
+            if 'RL' in df_acomp.columns and 'CMV_R$' in df_acomp.columns:
+                st.subheader("💰 Receita Líquida vs CMV")
+                
+                fig_receita = make_subplots(specs=[[{"secondary_y": True}]])
+                
+                fig_receita.add_trace(
+                    go.Bar(x=df_acomp['Periodo'], y=df_acomp['RL'], name='Receita Líquida', marker_color='#00f2fe'),
+                    secondary_y=False
+                )
+                
+                fig_receita.add_trace(
+                    go.Scatter(x=df_acomp['Periodo'], y=df_acomp['CMV_R$'], mode='lines+markers', name='CMV', line=dict(color='#ff4b4b', width=2)),
+                    secondary_y=True
+                )
+                
+                fig_receita.update_layout(
+                    template='plotly_dark',
+                    plot_bgcolor='rgba(0,0,0,0)',
+                    paper_bgcolor='rgba(0,0,0,0)',
+                    height=400,
+                    hovermode='x unified'
+                )
+                
+                fig_receita.update_xaxes(title_text="Período")
+                fig_receita.update_yaxes(title_text="Receita Líquida (R$)", secondary_y=False)
+                fig_receita.update_yaxes(title_text="CMV (R$)", secondary_y=True)
+                
+                st.plotly_chart(fig_receita, use_container_width=True)
+    else:
+        st.warning("️ **Aba ACOMPANHAMENTO não encontrada na planilha.**")
+        st.info("""
+        Para visualizar o acompanhamento mensal, adicione uma aba chamada **ACOMPANHAMENTO** na planilha do Google Sheets 
+        com as seguintes colunas (opcionais):
+        
+        - **PDV**: Código do ponto de venda
+        - **Ano**: Ano de referência (ex: 2025, 2026)
+        - **Mês**: Mês de referência (ex: Janeiro, Fevereiro)
+        - **Status**: Realizado ou Projetado
+        - **RL**: Receita Líquida
+        - **CMV%**: Percentual de CMV
+        - **CMV_R$**: Valor do CMV em reais
+        - **COB_INI**: Cobertura de estoque inicial (dias)
+        - **COB_FIM**: Cobertura de estoque final (dias)
+        - **COB_IDEAL**: Cobertura ideal (dias)
+        - **Estoque_Ideal**: Valor do estoque ideal
+        - **Compras_Mês**: Valor de compras do mês
+        """)
+
+# ==========================================
+# ABAS DAS MARCAS (BOTICÁRIO, EUDORA, QDB)
+# ==========================================
 for i, (nome_marca, df_completo) in enumerate(dados_marcas.items()):
-    with abas_tela[i]:
+    with abas_principais[i + 1]:  # +1 porque a primeira aba é Acompanhamento
         df_loja = df_completo[df_completo['PDV'] == pdv_selecionado]
         
         if df_loja.empty:
@@ -149,19 +328,19 @@ for i, (nome_marca, df_completo) in enumerate(dados_marcas.items()):
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("💰 Valor Estoque Atual (Venda)", f"R$ {v_estoque_atual:,.2f}")
         col2.metric("📉 Valor Estoque Mínimo (Venda)", f"R$ {v_estoque_min:,.2f}")
-        col3.metric("️ Capital Preso (Excesso)", f"R$ {v_excesso_total:,.2f}", delta=f"{((v_excesso_total/v_estoque_atual)*100 if v_estoque_atual > 0 else 0):.1f}% do estoque", delta_color="inverse")
-        col4.metric(" Risco de Ruptura (Falta)", f"R$ {v_falta_total:,.2f}", delta="Abaixo do Mínimo", delta_color="off")
+        col3.metric("⚠️ Capital Preso (Excesso)", f"R$ {v_excesso_total:,.2f}", delta=f"{((v_excesso_total/v_estoque_atual)*100 if v_estoque_atual > 0 else 0):.1f}% do estoque", delta_color="inverse")
+        col4.metric("🚨 Risco de Ruptura (Falta)", f"R$ {v_falta_total:,.2f}", delta="Abaixo do Mínimo", delta_color="off")
         
         # Nova linha de KPIs - Custo
         st.markdown("---")
-        st.subheader("💵 Análise de Custos (Baseado no Preço Tabela)")
+        st.subheader(" Análise de Custos (Baseado no Preço Tabela)")
         col5, col6 = st.columns(2)
         col5.metric("💵 Custo Total do Estoque Atual", f"R$ {v_custo_estoque_atual:,.2f}", help="Soma do preço de tabela de todos os produtos em estoque")
         col6.metric("💵 Custo Total do Estoque Mínimo", f"R$ {v_custo_estoque_min:,.2f}", help="Soma do preço de tabela do estoque mínimo necessário")
         
         # Tabela de Custo por Curva (A, B, C, E)
         st.markdown("---")
-        st.subheader("📊 Custo Total por Curva de Produto")
+        st.subheader(" Custo Total por Curva de Produto")
         
         if 'Classe' in df_loja.columns:
             # Agrupa por Classe e calcula o total de custo do estoque atual
