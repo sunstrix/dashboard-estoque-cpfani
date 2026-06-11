@@ -1037,7 +1037,7 @@ def main():
         st.plotly_chart(fig_cat, use_container_width=True)
 
     # ==========================================
-    # TABELAS DE EXCESSOS E FALTAS
+    # TABELAS DE EXCESSOS E FALTAS (COM PREÇO CONSIDERADO)
     # ==========================================
     st.markdown("---")
 
@@ -1056,10 +1056,11 @@ def main():
 
         with col_tab1:
             st.write("### 🛑 Excessos Críticos")
+            # Seleciona colunas e renomeia 'Preço de Custo' para 'Preço Considerado'
             df_excesso_tabela = df_loja[
                 (df_loja['Valor_Excesso'] > 0) & (df_loja['Estoque_Minimo_Qtd'] > 0)
-            ][['SKU', 'Descrição', 'Classe', 'Estoque Atual', 'Estoque_Minimo_Qtd', 'Qtd_Excesso', 'Preço tabela', 'Preço de Custo', 'Valor_Excesso']
-            ].sort_values(by='Valor_Excesso', ascending=False)
+            ][['SKU', 'Descrição', 'Classe', 'Estoque Atual', 'Estoque_Minimo_Qtd', 'Qtd_Excesso', 'Preço de Custo', 'Valor_Excesso']
+            ].rename(columns={'Preço de Custo': 'Preço Considerado'}).sort_values(by='Valor_Excesso', ascending=False)
 
             total_excesso_qtd = int(df_excesso_tabela['Qtd_Excesso'].sum()) if not df_excesso_tabela.empty else 0
             total_excesso_val = df_excesso_tabela['Valor_Excesso'].sum() if not df_excesso_tabela.empty else 0
@@ -1069,14 +1070,16 @@ def main():
             col_e2.metric("Unidades em excesso", f"{total_excesso_qtd:,}")
             col_e3.metric("Valor total em excesso", f"R$ {total_excesso_val:,.2f}")
 
-            st.dataframe(df_excesso_tabela.style.format({'Preço tabela': 'R$ {:.2f}', 'Preço de Custo': 'R$ {:.2f}', 'Valor_Excesso': 'R$ {:.2f}'}),
+            # Formata apenas a coluna 'Preço Considerado' e 'Valor_Excesso'
+            st.dataframe(df_excesso_tabela.style.format({'Preço Considerado': 'R$ {:.2f}', 'Valor_Excesso': 'R$ {:.2f}'}),
                          use_container_width=True, height=280)
 
         with col_tab2:
             st.write("### 🚨 Produtos Críticos em Falta / Ruptura")
+            # Seleciona colunas e renomeia 'Preço de Custo' para 'Preço Considerado'
             df_falta_tabela = df_loja[df_loja['Valor_Falta'] > 0][
-                ['SKU', 'Descrição', 'Classe', 'Estoque Atual', 'Estoque_Minimo_Qtd', 'Qtd_Falta', 'Preço tabela', 'Preço de Custo', 'Valor_Falta']
-            ].sort_values(by='Valor_Falta', ascending=False)
+                ['SKU', 'Descrição', 'Classe', 'Estoque Atual', 'Estoque_Minimo_Qtd', 'Qtd_Falta', 'Preço de Custo', 'Valor_Falta']
+            ].rename(columns={'Preço de Custo': 'Preço Considerado'}).sort_values(by='Valor_Falta', ascending=False)
 
             total_falta_qtd = int(df_falta_tabela['Qtd_Falta'].sum()) if not df_falta_tabela.empty else 0
             total_falta_val = df_falta_tabela['Valor_Falta'].sum() if not df_falta_tabela.empty else 0
@@ -1086,7 +1089,8 @@ def main():
             col_f2.metric("Unidades em falta", f"{total_falta_qtd:,}")
             col_f3.metric("Risco financeiro", f"R$ {total_falta_val:,.2f}")
 
-            st.dataframe(df_falta_tabela.style.format({'Preço tabela': 'R$ {:.2f}', 'Preço de Custo': 'R$ {:.2f}', 'Valor_Falta': 'R$ {:.2f}'}),
+            # Formata apenas a coluna 'Preço Considerado' e 'Valor_Falta'
+            st.dataframe(df_falta_tabela.style.format({'Preço Considerado': 'R$ {:.2f}', 'Valor_Falta': 'R$ {:.2f}'}),
                          use_container_width=True, height=280)
 
         st.markdown("---")
