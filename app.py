@@ -387,6 +387,18 @@ def carregar_dados_principais(draft_buffer):
                 df['Preço tabela'] = pd.to_numeric(df['Preço tabela'], errors='coerce').fillna(0)
                 df['SKU'] = df['SKU'].apply(normalizar_sku)
                 
+                # NOVA COLUNA: Estoque em Trânsito
+                colunas_transito = ['Estoque em Trânsito', 'Estoque em Transito', 'Estoque Transito', 
+                                   'Em Trânsito', 'Em Transito', 'Trânsito', 'Transito']
+                coluna_transito = next((c for c in colunas_transito if c in df.columns), None)
+                
+                if coluna_transito:
+                    df['Estoque em Trânsito'] = pd.to_numeric(df[coluna_transito], errors='coerce').fillna(0)
+                    logger.info(f"✅ Coluna 'Estoque em Trânsito' encontrada: {coluna_transito}")
+                else:
+                    df['Estoque em Trânsito'] = 0
+                    logger.warning(f"Aba {aba_excel}: coluna 'Estoque em Trânsito' não encontrada. Usando 0.")
+                
                 dicionario_marcas[nome_exibicao] = df
                 logger.info(f"✅ {aba_excel}: {len(df)} registros carregados")
                 
@@ -895,6 +907,116 @@ def main():
     st.markdown("---")
     
     # ==========================================
+    # NOVA TABELA: COBERTURA POR CLASSE (Atual + Trânsito)
+    # ==========================================
+    st.subheader("📦 Cobertura por Classe (Estoque Atual + Trânsito)")
+    
+    df_cobertura_classes = pd.DataFrame()
+    
+    for nome_marca, df_completo in dados_filtrados.items():
+        if pdv_selecionado == 'TODAS':
+            df_loja = df_completo
+        else:
+            df_loja = df_completo[df_completo['PDV'] == pdv_selecionado]
+        
+        if not df_loja.empty and 'Classe' in df_loja.columns:
+            # Calcula a média: (Estoque Atual + Estoque em Trânsito) / 2
+            df_loja['Cobertura_Media'] = (df_loja['Estoque Atual'] + df_loja['Estoque em Trânsito']) / 2
+            
+            # Agrupa por classe e soma
+            df_classe = df_loja.groupby('Classe').agg({
+                'Cobertura_Media': 'sum',
+                'SKU': 'count'
+            }).reset_index()
+            df_classe.columns = ['Classe', 'Cobertura Atual+Transito', 'Qtd SKUs']
+            df_classe['Marca'] = nome_marca
+            
+            df_cobertura_classes = pd.concat([df_cobertura_classes, df_classe], ignore_index=True)
+    
+    if not df_cobertura_classes.empty:
+        if marca_selecionada == "Todas as Marcas":
+            # Pivot: Classe nas linhas, Marcas nas colunas
+            df_pivot_cob = df_cobertura_classes.pivot_table(
+                values='Cobertura Atual+Transito', 
+                index='Classe', 
+                columns='Marca', 
+                aggfunc='sum',
+                fill_value=0
+            ).reset_index()
+            
+            # Adiciona coluna Total Geral
+            colunas_marcas_cob = [col for col in df_pivot_cob.columns if col != 'Classe']
+            df_pivot_cob['Total Geral'] = df_pivot_cob[colunas_marcas_cob].sum(axis=1)
+            
+            # Adiciona linha TOTAL
+            linha_total_cob = {'Classe': 'TOTAL'}
+            for col in colunas_marcas_cob:
+                linha_total_cob[col] = df_pivot_cob[col].sum()
+            linha_total_cob['Total Geral'] = df_pivot_cob['Total Geral'].sum()
+            df_pivot_cob = pd.concat([df_pivot_cob, pd.DataFrame([linha_total_cob])], ignore_index=True)
+            
+            # Formata valores como inteiros
+            for col in colunas_marcas_cob + ['Total Geral']:
+                df_pivot_cob[col] = df_pivot_cob[col].apply(lambda x: f"{int(x):,}")
+            
+            st.dataframe(df_pivot_cob, use_container_width=True, hide_index=True)
+        else:
+            # Mostra apenas a marca selecionada
+            df_exibicao_cob = df_cobertura_classes[['Classe', 'Cobertura Atual+Transito', 'Qtd SKUs']].copy()
+            df_exibicao_cob = df_exibicao_cob.sort_values('Classe')
+            
+            # Adiciona linha TOTAL
+            total_cobertura = df_exibicao_cob['Cobertura Atual+Transito'].sum()
+            total_skus_cob = df_exibicao_cob['Qtd SKUs'].sum()
+            df_total_cob = pd.DataFrame([{
+                'Classe': 'TOTAL', 
+                'Cobertura Atual+Transito': total_cobertura, 
+                'Qtd SKUs': total_skus_cob
+            }])
+            df_exibicao_cob = pd.concat([df_exibicao_cob, df_total_cob], ignore_index=True)
+            
+            # Formata como inteiro
+            df_exibicao_cob['Cobertura Atual+Transito'] = df_exibicao_cob['Cobertura Atual+Transito'].apply(lambda x: f"{int(x):,}")
+            
+            st.dataframe(df_exibicao_cob, use_container_width=True, hide_index=True)
+        
+        # Gráfico de cobertura por classe
+        fig_cobertura = go.Figure()
+        
+        if marca_selecionada == "Todas as Marcas":
+            for nome_marca in dados_filtrados.keys():
+                df_mc_cob = df_cobertura_classes[df_cobertura_classes['Marca'] == nome_marca]
+                if not df_mc_cob.empty:
+                    fig_cobertura.add_trace(go.Bar(
+                        x=df_mc_cob['Classe'], 
+                        y=df_mc_cob['Cobertura Atual+Transito'], 
+                        name=nome_marca,
+                        marker_color=CORES_MARCAS.get(nome_marca, '#007A33')
+                    ))
+            fig_cobertura.update_layout(barmode='stack')
+        else:
+            fig_cobertura.add_trace(go.Bar(
+                x=df_cobertura_classes['Classe'], 
+                y=df_cobertura_classes['Cobertura Atual+Transito'],
+                marker_color=[CORES_MARCAS.get(marca_selecionada, '#007A33')] * len(df_cobertura_classes),
+                text=[f"{int(v):,}" for v in df_cobertura_classes['Cobertura Atual+Transito']],
+                textposition='auto'
+            ))
+        
+        fig_cobertura.update_layout(
+            template='plotly_dark', 
+            plot_bgcolor='rgba(0,0,0,0)', 
+            paper_bgcolor='rgba(0,0,0,0)', 
+            height=400,
+            xaxis_title='Classe',
+            yaxis_title='Cobertura (Unidades)',
+            title='Distribuição de Cobertura por Classe'
+        )
+        st.plotly_chart(fig_cobertura, use_container_width=True)
+    
+    st.markdown("---")
+    
+    # ==========================================
     # GRÁFICO COMPARATIVO POR MARCA
     # ==========================================
     if marca_selecionada == "Todas as Marcas":
@@ -1037,7 +1159,7 @@ def main():
         st.plotly_chart(fig_cat, use_container_width=True)
 
     # ==========================================
-    # TABELAS DE EXCESSOS E FALTAS (COM PREÇO CONSIDERADO)
+    # TABELAS DE EXCESSOS E FALTAS
     # ==========================================
     st.markdown("---")
 
@@ -1056,7 +1178,6 @@ def main():
 
         with col_tab1:
             st.write("### 🛑 Excessos Críticos")
-            # Seleciona colunas e renomeia 'Preço de Custo' para 'Preço Considerado'
             df_excesso_tabela = df_loja[
                 (df_loja['Valor_Excesso'] > 0) & (df_loja['Estoque_Minimo_Qtd'] > 0)
             ][['SKU', 'Descrição', 'Classe', 'Estoque Atual', 'Estoque_Minimo_Qtd', 'Qtd_Excesso', 'Preço de Custo', 'Valor_Excesso']
@@ -1070,13 +1191,11 @@ def main():
             col_e2.metric("Unidades em excesso", f"{total_excesso_qtd:,}")
             col_e3.metric("Valor total em excesso", f"R$ {total_excesso_val:,.2f}")
 
-            # Formata apenas a coluna 'Preço Considerado' e 'Valor_Excesso'
             st.dataframe(df_excesso_tabela.style.format({'Preço Considerado': 'R$ {:.2f}', 'Valor_Excesso': 'R$ {:.2f}'}),
                          use_container_width=True, height=280)
 
         with col_tab2:
             st.write("### 🚨 Produtos Críticos em Falta / Ruptura")
-            # Seleciona colunas e renomeia 'Preço de Custo' para 'Preço Considerado'
             df_falta_tabela = df_loja[df_loja['Valor_Falta'] > 0][
                 ['SKU', 'Descrição', 'Classe', 'Estoque Atual', 'Estoque_Minimo_Qtd', 'Qtd_Falta', 'Preço de Custo', 'Valor_Falta']
             ].rename(columns={'Preço de Custo': 'Preço Considerado'}).sort_values(by='Valor_Falta', ascending=False)
@@ -1089,7 +1208,6 @@ def main():
             col_f2.metric("Unidades em falta", f"{total_falta_qtd:,}")
             col_f3.metric("Risco financeiro", f"R$ {total_falta_val:,.2f}")
 
-            # Formata apenas a coluna 'Preço Considerado' e 'Valor_Falta'
             st.dataframe(df_falta_tabela.style.format({'Preço Considerado': 'R$ {:.2f}', 'Valor_Falta': 'R$ {:.2f}'}),
                          use_container_width=True, height=280)
 
