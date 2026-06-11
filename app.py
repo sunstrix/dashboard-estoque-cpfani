@@ -495,40 +495,38 @@ def carregar_todos_os_dados():
     logger.info("Fase 2: Processamento dos dados...")
     
     dados_marcas, data_atualizacao = carregar_dados_principais(buffer_draft)
-    
     if not dados_marcas:
         logger.error("Nenhum dado foi carregado da planilha principal")
         return {}, None, stats
     
     df_estoque_seguranca = carregar_estoque_seguranca(buffer_seguranca)
     df_retaguarda = carregar_planilha_retaguarda(buffer_retaguarda)
-    
     stats['total_skus_retaguarda'] = len(df_retaguarda) if not df_retaguarda.empty else 0
     
-    # 3. Merge com Retaguarda (custos)
+    # 3. Aplicação dos custos da Retaguarda (CORREÇÃO: usando abordagem mais robusta)
     logger.info("Fase 3: Aplicando custos da Retaguarda...")
     
     for nome_marca, df in dados_marcas.items():
-        # CORREÇÃO: Inicializa a coluna ANTES do merge
+        # CORREÇÃO: Inicializa a coluna ANTES de qualquer operação
         df['CUSTO_RETARGUARDA'] = 0.0
         
         if not df_retaguarda.empty:
-            df_merge = df_retaguarda[['PDV', 'SKU', 'CUSTO_RETARGUARDA']].copy()
+            # Cria um DataFrame com os valores que queremos atualizar
+            df_update = df_retaguarda[['PDV', 'SKU', 'CUSTO_RETARGUARDA']].copy()
+            df_update = df_update.set_index(['PDV', 'SKU'])
             
-            # Merge com indicator para saber quais foram encontrados
-            df = df.merge(df_merge, on=['PDV', 'SKU'], how='left', indicator=True)
+            # Atualiza os valores no DataFrame principal
+            idx = pd.MultiIndex.from_arrays([df['PDV'], df['SKU']])
+            
+            # Filtra os índices que estão no df_update
+            mask = idx.isin(df_update.index)
+            
+            # Atualiza apenas os valores que existem
+            df.loc[mask, 'CUSTO_RETARGUARDA'] = df_update.loc[idx[mask], 'CUSTO_RETARGUARDA'].values
             
             # Conta matches
-            match_count = (df['_merge'] == 'both').sum()
-            left_only_count = (df['_merge'] == 'left_only').sum()
-            stats['skus_matcheados'] += int(match_count)
-            stats['skus_sem_match'] += int(left_only_count)
-            
-            # Preenche NaN com 0 (caso não tenha encontrado na retaguarda)
-            df['CUSTO_RETARGUARDA'] = df['CUSTO_RETARGUARDA'].fillna(0)
-            
-            # Remove coluna indicator
-            df = df.drop(columns=['_merge'])
+            stats['skus_matcheados'] += int(mask.sum())
+            stats['skus_sem_match'] += len(df) - int(mask.sum())
         else:
             stats['skus_sem_match'] += len(df)
         
