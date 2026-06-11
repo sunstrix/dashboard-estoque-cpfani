@@ -18,3 +18,4 @@ google-auth
 
 # Gerenciamento seguro de variáveis de ambiente (credenciais)
 python-dotenv
+reportlab
