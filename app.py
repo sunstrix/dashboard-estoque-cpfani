@@ -137,7 +137,7 @@ DE_PARA_LOJAS = {
 
 DE_PARA_LOJAS_REVERSO = {v: k for k, v in DE_PARA_LOJAS.items()}
 
-# Mapeamento com chave NORMALIZADA (sem pontuação, lower case, sem espaços extras)
+# Mapeamento com chave NORMALIZADA
 MAPEAMENTO_PDV_DRAFT_RAW = {
     'Loja: 4842 - N. S. F. COSMETICOS E PRESENTES LTDA': 4842,
     'Loja: 5152 - N. S. F. COSMETICOS E PRESENTES LTDA': 5152,
@@ -179,62 +179,35 @@ CORES_MARCAS = {
 }
 
 # ==========================================
-# FUNÇÕES DE NORMALIZAÇÃO (NOVAS)
+# FUNÇÕES DE NORMALIZAÇÃO
 # ==========================================
 
 def normalizar_sku(valor):
-    """
-    Normaliza SKUs para garantir correspondência entre planilhas.
-    - Converte para string
-    - Remove .0 (quando vem como float do Excel)
-    - Remove zeros à esquerda
-    - Remove espaços
-    - Converte para uppercase
-    """
     if pd.isna(valor) or valor is None:
         return ""
-    
     s = str(valor).strip()
-    
-    # Remove .0 no final (ex: "123.0" -> "123")
     if s.endswith('.0'):
         s = s[:-2]
-    
-    # Se for puramente numérico, remove zeros à esquerda
     try:
         num = float(s)
         if num == int(num):
             s = str(int(num))
     except (ValueError, TypeError):
         pass
-    
-    # Remove espaços internos e uppercase
     s = re.sub(r'\s+', '', s).upper()
-    
     return s
 
 
 def normalizar_nome_loja(nome):
-    """
-    Normaliza nomes de loja para comparação tolerante.
-    - Lowercase
-    - Remove pontuação e acentos
-    - Remove espaços extras
-    """
     if pd.isna(nome) or nome is None:
         return ""
-    
     s = str(nome).strip()
-    # Remove acentos
     s = s.lower()
-    # Remove tudo que não for letra, número ou espaço
     s = re.sub(r'[^a-z0-9\s]', '', s)
-    # Normaliza espaços
     s = re.sub(r'\s+', ' ', s).strip()
     return s
 
 
-# Mapeamento normalizado das lojas
 MAPEAMENTO_PDV_DRAFT_NORMALIZADO = {
     normalizar_nome_loja(k): v for k, v in MAPEAMENTO_PDV_DRAFT_RAW.items()
 }
@@ -349,11 +322,13 @@ def obter_horario_brasilia():
     return datetime.now(fuso_brasilia).strftime("%d/%m/%Y às %H:%M:%S")
 
 
-def carregar_planilha_draft(url):
+def carregar_planilha_draft(url, todos_pdvs=None):
     """
-    Carrega a planilha draft e normaliza SKU + PDV para garantir merge correto.
-    Retorna DataFrame com PDV (int), SKU (str normalizado) e CUSTO_DRAFT.
+    CORREÇÃO: Se não houver coluna de loja na draft, assume que custos são para TODOS os PDVs.
     """
+    if todos_pdvs is None:
+        todos_pdvs = list(DE_PARA_LOJAS.keys())
+    
     excel_buffer = download_arquivo_excel_com_retry(url, "planilha draft de custos", timeout=90)
     if excel_buffer is None:
         _registrar_erro("Planilha Draft: download falhou.")
@@ -372,7 +347,7 @@ def carregar_planilha_draft(url):
         
         df_draft.columns = [str(col).strip().upper() for col in df_draft.columns]
 
-        # Detecta coluna de Loja/PDV
+        # Detecta coluna de Loja/PDV (opcional)
         colunas_loja_possiveis = ['LOJA', 'PDV', 'LOJA/PDV', 'LOJA - PDV', 'CÓDIGO LOJA', 'CODIGO LOJA',
                                    'FILIAL', 'COD FILIAL', 'LOJA NOME', 'NOME LOJA']
         coluna_loja = next((col for col in colunas_loja_possiveis if col in df_draft.columns), None)
@@ -388,34 +363,47 @@ def carregar_planilha_draft(url):
                                    'PREÇO CUSTO', 'PRECO CUSTO']
         coluna_custo = next((col for col in colunas_custo_possiveis if col in df_draft.columns), None)
 
-        # Fallback: tenta coluna J (índice 9)
         if coluna_custo is None and len(df_draft.columns) > 9:
             coluna_custo = df_draft.columns[9]
 
-        if coluna_loja is None or coluna_sku is None or coluna_custo is None:
-            _registrar_erro(f"Planilha Draft: colunas faltantes. Loja={coluna_loja}, SKU={coluna_sku}, Custo={coluna_custo}. Colunas disponíveis: {list(df_draft.columns)}")
+        if coluna_sku is None or coluna_custo is None:
+            _registrar_erro(f"Planilha Draft: colunas faltantes. SKU={coluna_sku}, Custo={coluna_custo}. Colunas disponíveis: {list(df_draft.columns)}")
             return pd.DataFrame()
 
         df_resultado = pd.DataFrame()
-        df_resultado['LOJA_NOME_ORIGINAL'] = df_draft[coluna_loja].astype(str)
-        df_resultado['LOJA_NOME_NORMALIZADO'] = df_resultado['LOJA_NOME_ORIGINAL'].apply(normalizar_nome_loja)
         df_resultado['SKU'] = df_draft[coluna_sku].apply(normalizar_sku)
         df_resultado['CUSTO_DRAFT'] = pd.to_numeric(df_draft[coluna_custo], errors='coerce').fillna(0)
         
-        # Mapeia loja normalizada -> PDV
-        df_resultado['PDV'] = df_resultado['LOJA_NOME_NORMALIZADO'].map(MAPEAMENTO_PDV_DRAFT_NORMALIZADO)
-        
-        # Mantém apenas linhas com PDV válido
-        total_antes = len(df_resultado)
-        df_resultado = df_resultado[df_resultado['PDV'].notna()].copy()
-        total_depois = len(df_resultado)
-        
-        if total_depois < total_antes:
-            _registrar_erro(f"Planilha Draft: {total_antes - total_depois} linhas descartadas por PDV não reconhecido.")
-        
-        if df_resultado.empty:
-            _registrar_erro("Planilha Draft: nenhum PDV reconhecido após mapeamento.")
-            return pd.DataFrame()
+        # ==========================================
+        # CORREÇÃO PRINCIPAL: Se não tem coluna de loja, aplica para TODOS os PDVs
+        # ==========================================
+        if coluna_loja is None:
+            # Cria cross-join: cada SKU aparece para todos os PDVs
+            df_expandido = []
+            for pdv in todos_pdvs:
+                df_temp = df_resultado.copy()
+                df_temp['PDV'] = pdv
+                df_expandido.append(df_temp)
+            
+            df_resultado = pd.concat(df_expandido, ignore_index=True)
+            _registrar_erro(f"Planilha Draft: sem coluna de loja. Custos aplicados para todos os {len(todos_pdvs)} PDVs.")
+        else:
+            # Tem coluna de loja - mapeia normalmente
+            df_resultado['LOJA_NOME_ORIGINAL'] = df_draft[coluna_loja].astype(str)
+            df_resultado['LOJA_NOME_NORMALIZADO'] = df_resultado['LOJA_NOME_ORIGINAL'].apply(normalizar_nome_loja)
+            df_resultado['PDV'] = df_resultado['LOJA_NOME_NORMALIZADO'].map(MAPEAMENTO_PDV_DRAFT_NORMALIZADO)
+            
+            # Mantém apenas linhas com PDV válido
+            total_antes = len(df_resultado)
+            df_resultado = df_resultado[df_resultado['PDV'].notna()].copy()
+            total_depois = len(df_resultado)
+            
+            if total_depois < total_antes:
+                _registrar_erro(f"Planilha Draft: {total_antes - total_depois} linhas descartadas por PDV não reconhecido.")
+            
+            if df_resultado.empty:
+                _registrar_erro("Planilha Draft: nenhum PDV reconhecido após mapeamento.")
+                return pd.DataFrame()
         
         df_resultado['PDV'] = df_resultado['PDV'].astype(int)
         
@@ -511,7 +499,11 @@ def carregar_dados_nuvem(url_principal, url_seguranca, url_draft):
     
     try:
         df_estoque_seguranca = carregar_estoque_seguranca(url_seguranca)
-        df_draft = carregar_planilha_draft(url_draft)
+        
+        # Passa todos os PDVs para a função de carga da draft
+        todos_pdvs = list(DE_PARA_LOJAS.keys())
+        df_draft = carregar_planilha_draft(url_draft, todos_pdvs=todos_pdvs)
+        
         data_atualizacao = obter_data_atualizacao_planilha(url_principal)
 
         stats_draft['total_skus_draft'] = len(df_draft) if not df_draft.empty else 0
@@ -534,7 +526,7 @@ def carregar_dados_nuvem(url_principal, url_seguranca, url_draft):
                 df['Estoque Atual'] = pd.to_numeric(df['Estoque Atual'], errors='coerce').fillna(0)
                 df['Preço tabela'] = pd.to_numeric(df['Preço tabela'], errors='coerce').fillna(0)
                 
-                # ⭐ NORMALIZAÇÃO DE SKU PARA MERGE CORRETO
+                # Normalização de SKU
                 df['SKU'] = df['SKU'].apply(normalizar_sku)
 
                 # ==========================================
@@ -545,7 +537,6 @@ def carregar_dados_nuvem(url_principal, url_seguranca, url_draft):
                 if not df_draft.empty:
                     df_draft_merge = df_draft[['PDV', 'SKU', 'CUSTO_DRAFT']].copy()
                     
-                    # Merge com indicador para sabermos quais SKUs foram encontrados
                     df = df.merge(
                         df_draft_merge,
                         on=['PDV', 'SKU'],
@@ -553,13 +544,11 @@ def carregar_dados_nuvem(url_principal, url_seguranca, url_draft):
                         indicator=True
                     )
                     
-                    # Conta matches
                     match_count = (df['_merge'] == 'both').sum()
                     left_only_count = (df['_merge'] == 'left_only').sum()
                     stats_draft['skus_matcheados'] += int(match_count)
                     stats_draft['skus_sem_match'] += int(left_only_count)
                     
-                    # Preenche NaN com 0 e remove coluna indicador
                     df['CUSTO_DRAFT'] = df['CUSTO_DRAFT'].fillna(0)
                     df = df.drop(columns=['_merge'])
                 else:
@@ -568,17 +557,10 @@ def carregar_dados_nuvem(url_principal, url_seguranca, url_draft):
                 # ==========================================
                 # REGRA DE CUSTO FINAL (VETORIZADA)
                 # ==========================================
-                # Se preço tabela for 0/NaN → usa custo draft
-                # Se ambos existem → usa o MAIOR
-                # Caso contrário → usa preço tabela
-                
                 preco_tabela = df['Preço tabela'].fillna(0)
                 custo_draft = df['CUSTO_DRAFT'].fillna(0)
                 
-                # Condição 1: Preço tabela é zero ou NaN → usa draft
                 cond1 = (df['Preço tabela'].isna()) | (preco_tabela == 0)
-                
-                # Condição 2: Custo draft > 0 → usa o máximo entre os dois
                 cond2 = custo_draft > 0
                 
                 df['Preço de Custo'] = np.where(
@@ -587,11 +569,9 @@ def carregar_dados_nuvem(url_principal, url_seguranca, url_draft):
                     np.where(cond2, np.maximum(preco_tabela, custo_draft), preco_tabela)
                 )
                 
-                # Conta quantos SKUs tiveram custo maior que preço de tabela
                 custo_maior = (custo_draft > preco_tabela) & (custo_draft > 0)
                 stats_draft['skus_custo_maior'] += int(custo_maior.sum())
 
-                # Remove coluna temporária
                 df = df.drop(columns=['CUSTO_DRAFT'], errors='ignore')
 
                 # Merge com estoque de segurança
@@ -697,7 +677,7 @@ def gerar_pdf_dashboard(dados_filtrados, pdv_selecionado, loja_selecionada_nome,
     elementos.append(Spacer(1, 0.5*cm))
 
     for nome_marca, df_completo in dados_filtrados.items():
-        df_loja = df_completo[df_completo['PDV'] == pdv_selecionado]
+        df_loja = df_completo[df_completo['PDV'] == pdv_selecionado] if pdv_selecionado != 'TODAS' else df_completo
         if df_loja.empty:
             continue
 
@@ -834,7 +814,7 @@ with col_info:
 st.markdown("---")
 
 # ==========================================
-# DIAGNÓSTICO DE CUSTOS (NOVO)
+# DIAGNÓSTICO DE CUSTOS
 # ==========================================
 if stats_draft.get('total_skus_draft', 0) > 0:
     with st.expander("🔍 Diagnóstico de Preços de Custo (clique para ver)", expanded=False):
@@ -853,23 +833,30 @@ else:
 st.markdown("---")
 
 # ==========================================
-# SIDEBAR
+# SIDEBAR - COM OPÇÃO "TODAS AS LOJAS"
 # ==========================================
 st.sidebar.title("Filtros de Visualização")
 
+# CORREÇÃO: Adiciona opção "Todas as Lojas"
 todos_pdvs = sorted(set(
     int(pdv)
     for df in dados_marcas.values()
     for pdv in df['PDV'].dropna()
 ))
-opcoes_selectbox = [DE_PARA_LOJAS.get(pdv, f"PDV {pdv}") for pdv in todos_pdvs]
+
+# Cria lista de opções com "Todas as Lojas" primeiro
+opcoes_selectbox = ["Todas as Lojas"] + [DE_PARA_LOJAS.get(pdv, f"PDV {pdv}") for pdv in todos_pdvs]
 
 loja_selecionada_nome = st.sidebar.selectbox("Selecione a Loja / PDV:", opcoes_selectbox)
 
-pdv_selecionado = DE_PARA_LOJAS_REVERSO.get(loja_selecionada_nome)
-if pdv_selecionado is None:
-    st.error("PDV não reconhecido. Por favor, selecione novamente.")
-    st.stop()
+# Determina PDV selecionado (ou "TODAS")
+if loja_selecionada_nome == "Todas as Lojas":
+    pdv_selecionado = 'TODAS'
+else:
+    pdv_selecionado = DE_PARA_LOJAS_REVERSO.get(loja_selecionada_nome)
+    if pdv_selecionado is None:
+        st.error("PDV não reconhecido. Por favor, selecione novamente.")
+        st.stop()
 
 st.sidebar.markdown("---")
 
@@ -894,17 +881,31 @@ if st.sidebar.button("🔄 Forçar Atualização dos Dados"):
     st.cache_data.clear()
     st.rerun()
 
-st.markdown(f"""
-<div style="
-    display:inline-block;
-    background: linear-gradient(135deg,#0d1f14,#111820);
-    border:1px solid #007A33; border-radius:20px;
-    padding:6px 20px; margin-bottom:12px;
-">
-    <span style="color:#8da9be;font-size:13px;">🏪 PDV selecionado: </span>
-    <span style="color:#D4AF37;font-weight:700;font-size:15px;">{loja_selecionada_nome}</span>
-</div>
-""", unsafe_allow_html=True)
+# Badge de PDV selecionado
+if pdv_selecionado == 'TODAS':
+    st.markdown(f"""
+    <div style="
+        display:inline-block;
+        background: linear-gradient(135deg,#0d1f14,#111820);
+        border:1px solid #007A33; border-radius:20px;
+        padding:6px 20px; margin-bottom:12px;
+    ">
+        <span style="color:#8da9be;font-size:13px;">🏪 PDV selecionado: </span>
+        <span style="color:#D4AF37;font-weight:700;font-size:15px;">Todas as Lojas ({len(todos_pdvs)} PDVs)</span>
+    </div>
+    """, unsafe_allow_html=True)
+else:
+    st.markdown(f"""
+    <div style="
+        display:inline-block;
+        background: linear-gradient(135deg,#0d1f14,#111820);
+        border:1px solid #007A33; border-radius:20px;
+        padding:6px 20px; margin-bottom:12px;
+    ">
+        <span style="color:#8da9be;font-size:13px;">🏪 PDV selecionado: </span>
+        <span style="color:#D4AF37;font-weight:700;font-size:15px;">{loja_selecionada_nome}</span>
+    </div>
+    """, unsafe_allow_html=True)
 
 if marca_selecionada == "Todas as Marcas":
     dados_filtrados = dados_marcas
@@ -917,7 +918,7 @@ st.markdown(f"### {titulo_secao}")
 st.markdown("---")
 
 # ==========================================
-# KPIs
+# KPIs - CONSOLIDA TODAS AS LOJAS SE SELECIONADO
 # ==========================================
 v_estoque_atual_total = 0
 v_estoque_min_total = 0
@@ -926,7 +927,13 @@ v_falta_total_total = 0
 qtd_itens_total = 0
 
 for nome_marca, df_completo in dados_filtrados.items():
-    df_loja = df_completo[df_completo['PDV'] == pdv_selecionado]
+    if pdv_selecionado == 'TODAS':
+        # Consolida todos os PDVs
+        df_loja = df_completo
+    else:
+        # Filtra por PDV específico
+        df_loja = df_completo[df_completo['PDV'] == pdv_selecionado]
+    
     if not df_loja.empty:
         v_estoque_atual_total += df_loja['Valor_Estoque_Atual'].sum()
         v_estoque_min_total += df_loja['Valor_Estoque_Minimo'].sum()
@@ -954,7 +961,11 @@ if marca_selecionada == "Todas as Marcas":
 
     dados_grafico = []
     for nome_marca, df_completo in dados_marcas.items():
-        df_loja = df_completo[df_completo['PDV'] == pdv_selecionado]
+        if pdv_selecionado == 'TODAS':
+            df_loja = df_completo
+        else:
+            df_loja = df_completo[df_completo['PDV'] == pdv_selecionado]
+        
         if not df_loja.empty:
             dados_grafico.append({
                 'Marca': nome_marca,
@@ -998,7 +1009,11 @@ st.subheader("📊 Custo Total por Curva de Produto")
 
 df_curva_consolidado = pd.DataFrame()
 for nome_marca, df_completo in dados_filtrados.items():
-    df_loja = df_completo[df_completo['PDV'] == pdv_selecionado]
+    if pdv_selecionado == 'TODAS':
+        df_loja = df_completo
+    else:
+        df_loja = df_completo[df_completo['PDV'] == pdv_selecionado]
+    
     if not df_loja.empty and 'Classe' in df_loja.columns:
         df_agrupado = df_loja.groupby('Classe').agg({'Valor_Custo_Estoque_Atual': 'sum', 'SKU': 'count'}).reset_index()
         df_agrupado.columns = ['Curva', 'Custo Total', 'Qtd SKUs']
@@ -1051,7 +1066,11 @@ st.subheader("📊 Análise por Categoria")
 
 df_categoria_consolidado = pd.DataFrame()
 for nome_marca, df_completo in dados_filtrados.items():
-    df_loja = df_completo[df_completo['PDV'] == pdv_selecionado]
+    if pdv_selecionado == 'TODAS':
+        df_loja = df_completo
+    else:
+        df_loja = df_completo[df_completo['PDV'] == pdv_selecionado]
+    
     if not df_loja.empty and 'Categoria' in df_loja.columns:
         df_cat = df_loja.groupby('Categoria')[['Valor_Estoque_Atual', 'Valor_Estoque_Minimo']].sum().reset_index()
         df_cat['Marca'] = nome_marca
@@ -1082,7 +1101,11 @@ if not df_categoria_consolidado.empty:
 st.markdown("---")
 
 for nome_marca, df_completo in dados_filtrados.items():
-    df_loja = df_completo[df_completo['PDV'] == pdv_selecionado]
+    if pdv_selecionado == 'TODAS':
+        df_loja = df_completo
+    else:
+        df_loja = df_completo[df_completo['PDV'] == pdv_selecionado]
+    
     if df_loja.empty:
         continue
 
@@ -1148,7 +1171,7 @@ if pdf_buffer is not None:
     st.download_button(
         label="📥 Exportar Relatório em PDF",
         data=pdf_buffer,
-        file_name=f"relatorio_estoque_{pdv_selecionado}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+        file_name=f"relatorio_estoque_{pdv_selecionado if pdv_selecionado != 'TODAS' else 'TODAS_LOJAS'}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
         mime="application/pdf",
         type="primary"
     )
