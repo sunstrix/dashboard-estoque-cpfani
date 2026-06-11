@@ -907,9 +907,9 @@ def main():
     st.markdown("---")
     
     # ==========================================
-    # NOVA TABELA: COBERTURA POR CLASSE (Atual + Trânsito)
+    # NOVA TABELA: COBERTURA MÉDIA POR CLASSE (Atual + Trânsito)
     # ==========================================
-    st.subheader("📦 Cobertura por Classe (Estoque Atual + Trânsito)")
+    st.subheader("📦 Cobertura Média por Classe (Estoque Atual + Trânsito)")
     
     df_cobertura_classes = pd.DataFrame()
     
@@ -923,12 +923,12 @@ def main():
             # Calcula a média: (Estoque Atual + Estoque em Trânsito) / 2
             df_loja['Cobertura_Media'] = (df_loja['Estoque Atual'] + df_loja['Estoque em Trânsito']) / 2
             
-            # Agrupa por classe e soma
+            # CORREÇÃO: Usa mean() em vez de sum() para calcular a MÉDIA por classe
             df_classe = df_loja.groupby('Classe').agg({
-                'Cobertura_Media': 'sum',
+                'Cobertura_Media': 'mean',  # MÉDIA em vez de soma
                 'SKU': 'count'
             }).reset_index()
-            df_classe.columns = ['Classe', 'Cobertura Atual+Transito', 'Qtd SKUs']
+            df_classe.columns = ['Classe', 'Cobertura Média Atual+Transito', 'Qtd SKUs']
             df_classe['Marca'] = nome_marca
             
             df_cobertura_classes = pd.concat([df_cobertura_classes, df_classe], ignore_index=True)
@@ -937,46 +937,29 @@ def main():
         if marca_selecionada == "Todas as Marcas":
             # Pivot: Classe nas linhas, Marcas nas colunas
             df_pivot_cob = df_cobertura_classes.pivot_table(
-                values='Cobertura Atual+Transito', 
+                values='Cobertura Média Atual+Transito', 
                 index='Classe', 
                 columns='Marca', 
-                aggfunc='sum',
+                aggfunc='mean',  # MÉDIA
                 fill_value=0
             ).reset_index()
             
-            # Adiciona coluna Total Geral
+            # Adiciona coluna Total Geral (média geral)
             colunas_marcas_cob = [col for col in df_pivot_cob.columns if col != 'Classe']
-            df_pivot_cob['Total Geral'] = df_pivot_cob[colunas_marcas_cob].sum(axis=1)
+            df_pivot_cob['Média Geral'] = df_pivot_cob[colunas_marcas_cob].mean(axis=1)
             
-            # Adiciona linha TOTAL
-            linha_total_cob = {'Classe': 'TOTAL'}
-            for col in colunas_marcas_cob:
-                linha_total_cob[col] = df_pivot_cob[col].sum()
-            linha_total_cob['Total Geral'] = df_pivot_cob['Total Geral'].sum()
-            df_pivot_cob = pd.concat([df_pivot_cob, pd.DataFrame([linha_total_cob])], ignore_index=True)
-            
-            # Formata valores como inteiros
-            for col in colunas_marcas_cob + ['Total Geral']:
-                df_pivot_cob[col] = df_pivot_cob[col].apply(lambda x: f"{int(x):,}")
+            # Formata valores como inteiros arredondados
+            for col in colunas_marcas_cob + ['Média Geral']:
+                df_pivot_cob[col] = df_pivot_cob[col].apply(lambda x: f"{int(round(x)):,}")
             
             st.dataframe(df_pivot_cob, use_container_width=True, hide_index=True)
         else:
             # Mostra apenas a marca selecionada
-            df_exibicao_cob = df_cobertura_classes[['Classe', 'Cobertura Atual+Transito', 'Qtd SKUs']].copy()
+            df_exibicao_cob = df_cobertura_classes[['Classe', 'Cobertura Média Atual+Transito', 'Qtd SKUs']].copy()
             df_exibicao_cob = df_exibicao_cob.sort_values('Classe')
             
-            # Adiciona linha TOTAL
-            total_cobertura = df_exibicao_cob['Cobertura Atual+Transito'].sum()
-            total_skus_cob = df_exibicao_cob['Qtd SKUs'].sum()
-            df_total_cob = pd.DataFrame([{
-                'Classe': 'TOTAL', 
-                'Cobertura Atual+Transito': total_cobertura, 
-                'Qtd SKUs': total_skus_cob
-            }])
-            df_exibicao_cob = pd.concat([df_exibicao_cob, df_total_cob], ignore_index=True)
-            
-            # Formata como inteiro
-            df_exibicao_cob['Cobertura Atual+Transito'] = df_exibicao_cob['Cobertura Atual+Transito'].apply(lambda x: f"{int(x):,}")
+            # Formata como inteiro arredondado
+            df_exibicao_cob['Cobertura Média Atual+Transito'] = df_exibicao_cob['Cobertura Média Atual+Transito'].apply(lambda x: f"{int(round(x)):,}")
             
             st.dataframe(df_exibicao_cob, use_container_width=True, hide_index=True)
         
@@ -989,17 +972,17 @@ def main():
                 if not df_mc_cob.empty:
                     fig_cobertura.add_trace(go.Bar(
                         x=df_mc_cob['Classe'], 
-                        y=df_mc_cob['Cobertura Atual+Transito'], 
+                        y=df_mc_cob['Cobertura Média Atual+Transito'], 
                         name=nome_marca,
                         marker_color=CORES_MARCAS.get(nome_marca, '#007A33')
                     ))
-            fig_cobertura.update_layout(barmode='stack')
+            fig_cobertura.update_layout(barmode='group')
         else:
             fig_cobertura.add_trace(go.Bar(
                 x=df_cobertura_classes['Classe'], 
-                y=df_cobertura_classes['Cobertura Atual+Transito'],
+                y=df_cobertura_classes['Cobertura Média Atual+Transito'],
                 marker_color=[CORES_MARCAS.get(marca_selecionada, '#007A33')] * len(df_cobertura_classes),
-                text=[f"{int(v):,}" for v in df_cobertura_classes['Cobertura Atual+Transito']],
+                text=[f"{int(round(v)):,}" for v in df_cobertura_classes['Cobertura Média Atual+Transito']],
                 textposition='auto'
             ))
         
@@ -1009,8 +992,8 @@ def main():
             paper_bgcolor='rgba(0,0,0,0)', 
             height=400,
             xaxis_title='Classe',
-            yaxis_title='Cobertura (Unidades)',
-            title='Distribuição de Cobertura por Classe'
+            yaxis_title='Cobertura Média (Unidades)',
+            title='Média de Cobertura por Classe'
         )
         st.plotly_chart(fig_cobertura, use_container_width=True)
     
