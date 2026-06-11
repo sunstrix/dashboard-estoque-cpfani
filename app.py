@@ -116,7 +116,7 @@ details summary {
 """, unsafe_allow_html=True)
 
 # ==========================================
-# CONSTANTES
+# CONSTANTES - URLs DAS PLANILHAS
 # ==========================================
 SPREADSHEET_ID_PRINCIPAL = "1EDDyKie9UiugMLMowcPzHfViqzziFcSgxVPvZ2Rx3L0"
 SPREADSHEET_ID_SEGURANCA = "1uHonFnFM4p7bz4s7YpewhKHNs6fSEfw9rDMTKC7jtHE"
@@ -137,7 +137,6 @@ DE_PARA_LOJAS = {
 
 DE_PARA_LOJAS_REVERSO = {v: k for k, v in DE_PARA_LOJAS.items()}
 
-# Mapeamento com chave NORMALIZADA
 MAPEAMENTO_PDV_DRAFT_RAW = {
     'Loja: 4842 - N. S. F. COSMETICOS E PRESENTES LTDA': 4842,
     'Loja: 5152 - N. S. F. COSMETICOS E PRESENTES LTDA': 5152,
@@ -232,6 +231,26 @@ def _registrar_erro(msg):
     st.session_state['erros_carregamento'].append(str(msg))
 
 
+def testar_conexao_url(url, descricao):
+    """Testa se a URL está acessível antes de tentar download."""
+    try:
+        response = requests.head(url, timeout=10, allow_redirects=True)
+        if response.status_code == 200:
+            return True, f"✅ {descricao} - Acessível ({response.status_code})"
+        elif response.status_code == 403:
+            return False, f"❌ {descricao} - Acesso negado (403). Verifique se a planilha está pública."
+        elif response.status_code == 404:
+            return False, f"❌ {descricao} - Não encontrada (404). Verifique o ID da planilha."
+        else:
+            return False, f"⚠️ {descricao} - Status {response.status_code}"
+    except requests.exceptions.Timeout:
+        return False, f"❌ {descricao} - Timeout na conexão"
+    except requests.exceptions.ConnectionError:
+        return False, f"❌ {descricao} - Erro de conexão. Verifique sua internet."
+    except Exception as e:
+        return False, f"❌ {descricao} - Erro: {str(e)[:100]}"
+
+
 def download_arquivo_excel_com_retry(url, descricao="arquivo", timeout=60):
     session = criar_sessao_com_retry()
     primeiro_conteudo = None
@@ -323,9 +342,6 @@ def obter_horario_brasilia():
 
 
 def carregar_planilha_draft(url, todos_pdvs=None):
-    """
-    CORREÇÃO: Se não houver coluna de loja na draft, assume que custos são para TODOS os PDVs.
-    """
     if todos_pdvs is None:
         todos_pdvs = list(DE_PARA_LOJAS.keys())
     
@@ -347,17 +363,14 @@ def carregar_planilha_draft(url, todos_pdvs=None):
         
         df_draft.columns = [str(col).strip().upper() for col in df_draft.columns]
 
-        # Detecta coluna de Loja/PDV (opcional)
         colunas_loja_possiveis = ['LOJA', 'PDV', 'LOJA/PDV', 'LOJA - PDV', 'CÓDIGO LOJA', 'CODIGO LOJA',
                                    'FILIAL', 'COD FILIAL', 'LOJA NOME', 'NOME LOJA']
         coluna_loja = next((col for col in colunas_loja_possiveis if col in df_draft.columns), None)
 
-        # Detecta coluna de SKU
         colunas_sku_possiveis = ['SKU', 'CÓDIGO', 'CODIGO', 'CÓDIGO SKU', 'CODIGO SKU', 'CÓD. SKU',
                                   'EAN', 'COD PRODUTO', 'CÓDIGO PRODUTO', 'COD. PRODUTO']
         coluna_sku = next((col for col in colunas_sku_possiveis if col in df_draft.columns), None)
 
-        # Detecta coluna de Custo
         colunas_custo_possiveis = ['CUSTO', 'PREÇO DE CUSTO', 'PRECO DE CUSTO', 'CUSTO UNITÁRIO',
                                    'CUSTO UNITARIO', 'VALOR CUSTO', 'CUSTO (R$)', 'CUSTO R$',
                                    'PREÇO CUSTO', 'PRECO CUSTO']
@@ -374,11 +387,7 @@ def carregar_planilha_draft(url, todos_pdvs=None):
         df_resultado['SKU'] = df_draft[coluna_sku].apply(normalizar_sku)
         df_resultado['CUSTO_DRAFT'] = pd.to_numeric(df_draft[coluna_custo], errors='coerce').fillna(0)
         
-        # ==========================================
-        # CORREÇÃO PRINCIPAL: Se não tem coluna de loja, aplica para TODOS os PDVs
-        # ==========================================
         if coluna_loja is None:
-            # Cria cross-join: cada SKU aparece para todos os PDVs
             df_expandido = []
             for pdv in todos_pdvs:
                 df_temp = df_resultado.copy()
@@ -388,12 +397,10 @@ def carregar_planilha_draft(url, todos_pdvs=None):
             df_resultado = pd.concat(df_expandido, ignore_index=True)
             _registrar_erro(f"Planilha Draft: sem coluna de loja. Custos aplicados para todos os {len(todos_pdvs)} PDVs.")
         else:
-            # Tem coluna de loja - mapeia normalmente
             df_resultado['LOJA_NOME_ORIGINAL'] = df_draft[coluna_loja].astype(str)
             df_resultado['LOJA_NOME_NORMALIZADO'] = df_resultado['LOJA_NOME_ORIGINAL'].apply(normalizar_nome_loja)
             df_resultado['PDV'] = df_resultado['LOJA_NOME_NORMALIZADO'].map(MAPEAMENTO_PDV_DRAFT_NORMALIZADO)
             
-            # Mantém apenas linhas com PDV válido
             total_antes = len(df_resultado)
             df_resultado = df_resultado[df_resultado['PDV'].notna()].copy()
             total_depois = len(df_resultado)
@@ -406,8 +413,6 @@ def carregar_planilha_draft(url, todos_pdvs=None):
                 return pd.DataFrame()
         
         df_resultado['PDV'] = df_resultado['PDV'].astype(int)
-        
-        # Remove duplicatas (mesmo PDV+SKU), mantendo a de maior custo
         df_resultado = df_resultado.sort_values('CUSTO_DRAFT', ascending=False).drop_duplicates(
             subset=['PDV', 'SKU'], keep='first'
         )
@@ -496,14 +501,38 @@ def carregar_dados_nuvem(url_principal, url_seguranca, url_draft):
     dicionario_marcas = {}
     data_atualizacao = None
     stats_draft = {'total_skus_draft': 0, 'skus_matcheados': 0, 'skus_sem_match': 0, 'skus_custo_maior': 0}
+    erros_detalhados = []
     
     try:
-        df_estoque_seguranca = carregar_estoque_seguranca(url_seguranca)
+        # Testa conectividade com as URLs
+        st.info("🔍 Testando conectividade com as planilhas...")
         
-        # Passa todos os PDVs para a função de carga da draft
+        teste_principal = testar_conexao_url(url_principal, "Planilha Principal")
+        if not teste_principal[0]:
+            erros_detalhados.append(teste_principal[1])
+            _registrar_erro(teste_principal[1])
+        
+        teste_seguranca = testar_conexao_url(url_seguranca, "Planilha Segurança")
+        if not teste_seguranca[0]:
+            erros_detalhados.append(teste_seguranca[1])
+            _registrar_erro(teste_seguranca[1])
+        
+        teste_draft = testar_conexao_url(url_draft, "Planilha Draft")
+        if not teste_draft[0]:
+            erros_detalhados.append(teste_draft[1])
+            _registrar_erro(teste_draft[1])
+        
+        if erros_detalhados:
+            st.error("❌ Erros de conectividade detectados:")
+            for erro in erros_detalhados:
+                st.error(erro)
+            st.info("💡 **Solução:** Verifique se as planilhas estão compartilhadas como 'Público' ou 'Qualquer pessoa com o link pode visualizar'.")
+            return {}, data_atualizacao, stats_draft
+        
+        # Carrega as planilhas
+        df_estoque_seguranca = carregar_estoque_seguranca(url_seguranca)
         todos_pdvs = list(DE_PARA_LOJAS.keys())
         df_draft = carregar_planilha_draft(url_draft, todos_pdvs=todos_pdvs)
-        
         data_atualizacao = obter_data_atualizacao_planilha(url_principal)
 
         stats_draft['total_skus_draft'] = len(df_draft) if not df_draft.empty else 0
@@ -515,6 +544,18 @@ def carregar_dados_nuvem(url_principal, url_seguranca, url_draft):
 
         try:
             excel_file = pd.ExcelFile(excel_buffer)
+            
+            # Verifica abas disponíveis
+            abas_disponiveis = excel_file.sheet_names
+            abas_esperadas = list(NOMES_MARCAS.keys())
+            abas_faltantes = [aba for aba in abas_esperadas if aba not in abas_disponiveis]
+            
+            if abas_faltantes:
+                msg = f"Planilha principal: abas esperadas não encontradas. Esperado: {abas_esperadas}, Disponível: {abas_disponiveis}"
+                _registrar_erro(msg)
+                st.error(f"❌ {msg}")
+                return {}, data_atualizacao, stats_draft
+            
             for aba_excel, nome_exibicao in NOMES_MARCAS.items():
                 if aba_excel not in excel_file.sheet_names:
                     _registrar_erro(f"Aba '{aba_excel}' não encontrada na planilha principal.")
@@ -526,12 +567,8 @@ def carregar_dados_nuvem(url_principal, url_seguranca, url_draft):
                 df['Estoque Atual'] = pd.to_numeric(df['Estoque Atual'], errors='coerce').fillna(0)
                 df['Preço tabela'] = pd.to_numeric(df['Preço tabela'], errors='coerce').fillna(0)
                 
-                # Normalização de SKU
                 df['SKU'] = df['SKU'].apply(normalizar_sku)
 
-                # ==========================================
-                # MERGE COM PLANILHA DRAFT (CUSTOS)
-                # ==========================================
                 df['CUSTO_DRAFT'] = 0.0
                 
                 if not df_draft.empty:
@@ -554,9 +591,6 @@ def carregar_dados_nuvem(url_principal, url_seguranca, url_draft):
                 else:
                     stats_draft['skus_sem_match'] += len(df)
 
-                # ==========================================
-                # REGRA DE CUSTO FINAL (VETORIZADA)
-                # ==========================================
                 preco_tabela = df['Preço tabela'].fillna(0)
                 custo_draft = df['CUSTO_DRAFT'].fillna(0)
                 
@@ -574,7 +608,6 @@ def carregar_dados_nuvem(url_principal, url_seguranca, url_draft):
 
                 df = df.drop(columns=['CUSTO_DRAFT'], errors='ignore')
 
-                # Merge com estoque de segurança
                 if not df_estoque_seguranca.empty:
                     df_seguranca_marca = df_estoque_seguranca[
                         df_estoque_seguranca['MARCA_REFERENCIA'] == nome_exibicao
@@ -763,12 +796,36 @@ with st.spinner("Carregando dados..."):
     horario_carregamento = obter_horario_brasilia()
 
 if st.session_state.get('erros_carregamento'):
-    with st.expander("⚠️ Avisos de carregamento (clique para ver)", expanded=False):
+    with st.expander("⚠️ Avisos de carregamento (clique para ver)", expanded=True):
         for erro in st.session_state['erros_carregamento']:
             st.warning(erro)
 
 if not dados_marcas:
     st.error("❌ Nenhum dado foi carregado. Verifique as permissões de compartilhamento da planilha e sua conexão com a internet.")
+    
+    st.info("""
+    ### 🔧 Passos para resolver:
+    
+    1. **Verifique se as planilhas estão públicas:**
+       - Abra cada planilha no Google Sheets
+       - Clique em "Compartilhar"
+       - Selecione "Qualquer pessoa com o link"
+       - Permissão: "Leitor"
+    
+    2. **Verifique os IDs das planilhas:**
+       - Planilha Principal: `1EDDyKie9UiugMLMowcPzHfViqzziFcSgxVPvZ2Rx3L0`
+       - Planilha Segurança: `1uHonFnFM4p7bz4s7YpewhKHNs6fSEfw9rDMTKC7jtHE`
+       - Planilha Draft: `11Z21gFvJ9pm2xSlF3IweC7xcYZwAZWrjcWDnRe5LexY`
+    
+    3. **Teste a conexão:**
+       - Tente abrir as URLs no navegador
+       - Verifique sua conexão com a internet
+    
+    4. **Verifique os nomes das abas:**
+       - Planilha Principal deve ter: `BOTICARIO`, `EUDORA`, `QUEM_DISSE_BERENICE`
+       - Planilha Segurança deve ter: `BOT`, `EUD`, `QDB`
+    """)
+    
     st.stop()
 
 if data_atualizacao_planilha:
@@ -833,23 +890,20 @@ else:
 st.markdown("---")
 
 # ==========================================
-# SIDEBAR - COM OPÇÃO "TODAS AS LOJAS"
+# SIDEBAR
 # ==========================================
 st.sidebar.title("Filtros de Visualização")
 
-# CORREÇÃO: Adiciona opção "Todas as Lojas"
 todos_pdvs = sorted(set(
     int(pdv)
     for df in dados_marcas.values()
     for pdv in df['PDV'].dropna()
 ))
 
-# Cria lista de opções com "Todas as Lojas" primeiro
 opcoes_selectbox = ["Todas as Lojas"] + [DE_PARA_LOJAS.get(pdv, f"PDV {pdv}") for pdv in todos_pdvs]
 
 loja_selecionada_nome = st.sidebar.selectbox("Selecione a Loja / PDV:", opcoes_selectbox)
 
-# Determina PDV selecionado (ou "TODAS")
 if loja_selecionada_nome == "Todas as Lojas":
     pdv_selecionado = 'TODAS'
 else:
@@ -881,7 +935,6 @@ if st.sidebar.button("🔄 Forçar Atualização dos Dados"):
     st.cache_data.clear()
     st.rerun()
 
-# Badge de PDV selecionado
 if pdv_selecionado == 'TODAS':
     st.markdown(f"""
     <div style="
@@ -918,7 +971,7 @@ st.markdown(f"### {titulo_secao}")
 st.markdown("---")
 
 # ==========================================
-# KPIs - CONSOLIDA TODAS AS LOJAS SE SELECIONADO
+# KPIs
 # ==========================================
 v_estoque_atual_total = 0
 v_estoque_min_total = 0
@@ -928,10 +981,8 @@ qtd_itens_total = 0
 
 for nome_marca, df_completo in dados_filtrados.items():
     if pdv_selecionado == 'TODAS':
-        # Consolida todos os PDVs
         df_loja = df_completo
     else:
-        # Filtra por PDV específico
         df_loja = df_completo[df_completo['PDV'] == pdv_selecionado]
     
     if not df_loja.empty:
