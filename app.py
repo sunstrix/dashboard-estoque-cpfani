@@ -47,7 +47,8 @@ st.markdown("""
     section[data-testid="stSidebar"] {
         background-color: #0a0d12;
         border-right: 2px solid #007A33;
-    }    
+    }
+    
     /* Títulos */
     h1, h2, h3 { color: #D4AF37; }
     
@@ -96,7 +97,8 @@ MAPEAMENTO_PDV_DRAFT = {
     'Loja: 6105 - N. S. F. COSMETICOS E PRESENTES LTDA': 6105,
     'Loja: 6106 - N. S. F. COSMETICOS E PRESENTES LTDA': 6106,
     'Loja: 6110 - N. S. F. COSMETICOS E PRESENTES LTDA': 6110,
-    'Loja: 8001 - N. S. F. COSMETICOS E PRESENTES LTDA': 8001,    'Loja: 11576 - N. S. F. COSMETICOS E PRESENTES LTDA': 11576,
+    'Loja: 8001 - N. S. F. COSMETICOS E PRESENTES LTDA': 8001,
+    'Loja: 11576 - N. S. F. COSMETICOS E PRESENTES LTDA': 11576,
     'Loja: 12055 - N. S. F. COSMETICOS E PRESENTES LTDA': 12055,
     'Loja: 12056 - S. P. ARON COSMETICOS EPP': 12056,
     'Loja: 12605 - N.S.F. COSMETICOS E PRESENTES LTDA.': 12605,
@@ -145,7 +147,8 @@ def criar_sessao_com_retry():
     Cria uma sessão requests com retry automático para lidar com falhas de rede.
     """
     session = requests.Session()
-    retry = Retry(        total=3,
+    retry = Retry(
+        total=3,
         backoff_factor=1,
         status_forcelist=[429, 500, 502, 503, 504],
         allowed_methods=["GET"]
@@ -194,7 +197,8 @@ def exibir_titulo_marca(nome_marca, tamanho_logo=30):
         logo_path = LOGOS_MARCAS.get(nome_marca, '')
         if logo_path:
             try:
-                st.image(logo_path, width=tamanho_logo)            except Exception:
+                st.image(logo_path, width=tamanho_logo)
+            except Exception:
                 st.write("🏷️")
         else:
             st.write("🏷️")
@@ -243,7 +247,8 @@ def carregar_planilha_draft(url):
         # Coluna de Loja/PDV (pode ter vários nomes)
         colunas_loja_possiveis = ['LOJA', 'PDV', 'LOJA/PDV', 'LOJA - PDV', 'CÓDIGO LOJA', 'CODIGO LOJA']
         coluna_loja = None
-        for col in colunas_loja_possiveis:            if col in df_draft.columns:
+        for col in colunas_loja_possiveis:
+            if col in df_draft.columns:
                 coluna_loja = col
                 break
         
@@ -292,7 +297,8 @@ def carregar_planilha_draft(url):
         df_resultado = df_resultado[['PDV', 'SKU', 'CUSTO_DRAFT']].copy()
         
         return df_resultado
-            except Exception:
+        
+    except Exception:
         return pd.DataFrame()
 
 def carregar_estoque_seguranca(url):
@@ -341,7 +347,8 @@ def carregar_estoque_seguranca(url):
                     if col in df_abas.columns:
                         coluna_seguranca = col
                         break
-                                if coluna_seguranca is None:
+                
+                if coluna_seguranca is None:
                     df_abas['ESTOQUE_DE_SEGURANCA'] = 0
                 else:
                     df_abas = df_abas.rename(columns={coluna_seguranca: 'ESTOQUE_DE_SEGURANCA'})
@@ -390,7 +397,8 @@ def obter_data_atualizacao_planilha(url_excel):
                             if isinstance(cell.value, datetime):
                                 workbook.close()
                                 return cell.value.strftime("%d/%m/%Y às %H:%M:%S")
-                            elif isinstance(cell.value, str):                                workbook.close()
+                            elif isinstance(cell.value, str):
+                                workbook.close()
                                 return cell.value
         
         workbook.close()
@@ -439,7 +447,8 @@ def carregar_dados_nuvem(url_principal, url_seguranca, url_draft):
                     # ==========================================
                     # REGRA DE CUSTO COM PLANILHA DRAFT
                     # ==========================================
-                    # 1. Se não tiver preço tabela → usa custo da draft                    # 2. Se tiver ambos → usa o MAIOR valor
+                    # 1. Se não tiver preço tabela → usa custo da draft
+                    # 2. Se tiver ambos → usa o MAIOR valor
                     
                     df['Custo_Draft_Original'] = 0.0
                     
@@ -488,7 +497,8 @@ def carregar_dados_nuvem(url_principal, url_seguranca, url_draft):
                     if not df_estoque_seguranca.empty:
                         df_seguranca_marca = df_estoque_seguranca[
                             df_estoque_seguranca['MARCA_REFERENCIA'] == nome_exibicao
-                        ].copy()                        
+                        ].copy()
+                        
                         if not df_seguranca_marca.empty:
                             df = df.merge(
                                 df_seguranca_marca[['PDV', 'SKU', 'ESTOQUE_DE_SEGURANCA']], 
@@ -537,7 +547,8 @@ if not dados_marcas:
     st.error("❌ Nenhum dado foi carregado. Verifique as permissões de compartilhamento da planilha e sua conexão com a internet.")
     st.stop()
 
-# Determina qual data/hora exibirif data_atualizacao_planilha:
+# Determina qual data/hora exibir
+if data_atualizacao_planilha:
     horario_exibicao = data_atualizacao_planilha
     info_timestamp = "🕒 Última atualização da planilha"
 else:
@@ -586,7 +597,8 @@ col_logos_sidebar = st.sidebar.columns(len(dados_marcas))
 for idx, (nome_marca, df_marca) in enumerate(dados_marcas.items()):
     with col_logos_sidebar[idx]:
         logo_path = LOGOS_MARCAS.get(nome_marca, '')
-        if logo_path:            try:
+        if logo_path:
+            try:
                 st.image(logo_path, width=40)
             except Exception:
                 pass
@@ -636,6 +648,7 @@ col3.metric("⚠️ Capital Preso (Excesso)", f"R$ {v_excesso_total_total:,.2f}"
 col4.metric("🚨 Risco de Ruptura (Falta)", f"R$ {v_falta_total_total:,.2f}", delta="Abaixo do Mínimo", delta_color="off")
 
 st.markdown("---")
+
 # ==========================================
 # GRÁFICO COMPARATIVO POR MARCA (Quantidade de Itens + Custo Total)
 # ==========================================
@@ -684,7 +697,8 @@ if marca_selecionada == "Todas as Marcas":
                 x=df_grafico_marcas['Marca'], 
                 y=df_grafico_marcas['Custo Total'], 
                 name='Custo Total',
-                marker_color=[CORES_MARCAS.get(m, '#007A33') for m in df_grafico_marcas['Marca']],                text=[f"R$ {v:,.0f}" for v in df_grafico_marcas['Custo Total']],
+                marker_color=[CORES_MARCAS.get(m, '#007A33') for m in df_grafico_marcas['Marca']],
+                text=[f"R$ {v:,.0f}" for v in df_grafico_marcas['Custo Total']],
                 textposition='auto'
             ))
             fig_custo_marcas.update_layout(
@@ -733,7 +747,8 @@ if not df_curva_consolidado.empty:
         for col in colunas_marcas:
             linha_total[col] = df_pivot[col].sum()
         linha_total['Total Geral'] = df_pivot['Total Geral'].sum()
-        df_pivot = pd.concat([df_pivot, pd.DataFrame([linha_total])], ignore_index=True)        
+        df_pivot = pd.concat([df_pivot, pd.DataFrame([linha_total])], ignore_index=True)
+        
         colunas_valor = [col for col in df_pivot.columns if col != 'Curva']
         for col in colunas_valor:
             df_pivot[col] = df_pivot[col].apply(lambda x: f"R$ {x:,.2f}")
@@ -783,6 +798,7 @@ if not df_curva_consolidado.empty:
         title='Distribuição de Custo por Curva'
     )
     st.plotly_chart(fig_custo, use_container_width=True)
+
 # ==========================================
 # ANÁLISE POR CATEGORIA
 # ==========================================
@@ -831,7 +847,8 @@ if not df_categoria_consolidado.empty:
         template='plotly_dark', 
         plot_bgcolor='rgba(0,0,0,0)', 
         paper_bgcolor='rgba(0,0,0,0)', 
-        height=400,        xaxis_title='Categoria',
+        height=400,
+        xaxis_title='Categoria',
         yaxis_title='Valor (R$)',
         title='Estoque por Categoria'
     )
