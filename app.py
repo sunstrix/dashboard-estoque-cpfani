@@ -222,7 +222,6 @@ def download_planilha_excel(url_planilha, nome_planilha):
 def carregar_planilha_retaguarda(custos_buffer):
     """
     Carrega planilha de custos (Retaguarda).
-    CORREÇÃO: Removeu referência a CUSTO_DRAFT
     """
     logger.info("Carregando planilha Retaguarda (custos)...")
     
@@ -510,19 +509,25 @@ def carregar_todos_os_dados():
     logger.info("Fase 3: Aplicando custos da Retaguarda...")
     
     for nome_marca, df in dados_marcas.items():
+        # CORREÇÃO: Inicializa a coluna ANTES do merge
         df['CUSTO_RETARGUARDA'] = 0.0
         
         if not df_retaguarda.empty:
             df_merge = df_retaguarda[['PDV', 'SKU', 'CUSTO_RETARGUARDA']].copy()
             
+            # Merge com indicator para saber quais foram encontrados
             df = df.merge(df_merge, on=['PDV', 'SKU'], how='left', indicator=True)
             
+            # Conta matches
             match_count = (df['_merge'] == 'both').sum()
             left_only_count = (df['_merge'] == 'left_only').sum()
             stats['skus_matcheados'] += int(match_count)
             stats['skus_sem_match'] += int(left_only_count)
             
+            # Preenche NaN com 0 (caso não tenha encontrado na retaguarda)
             df['CUSTO_RETARGUARDA'] = df['CUSTO_RETARGUARDA'].fillna(0)
+            
+            # Remove coluna indicator
             df = df.drop(columns=['_merge'])
         else:
             stats['skus_sem_match'] += len(df)
@@ -544,6 +549,7 @@ def carregar_todos_os_dados():
         custo_maior = (custo_retaguarda > preco_tabela) & (custo_retaguarda > 0)
         stats['skus_custo_maior'] += int(custo_maior.sum())
         
+        # Remove coluna temporária
         df = df.drop(columns=['CUSTO_RETARGUARDA'], errors='ignore')
         
         # Merge com estoque de segurança
@@ -851,16 +857,8 @@ def main():
     
     st.markdown("---")
     
-    # ==========================================
-    # GRÁFICOS E TABELAS
-    # ==========================================
-    # (Continuação do código com gráficos, tabelas de excesso/falta, etc.)
-    # Por limitação de tamanho, o restante do código segue a mesma estrutura
-    # anterior, apenas adaptando para usar pdv_selecionado == 'TODAS' quando necessário
-    
-    # ... (resto do código de visualizações)
-    
-    st.info("📊 Dashboard carregado com sucesso! Consulte os logs para detalhes de performance.")
+    st.success("✅ Dashboard carregado com sucesso!")
+    st.info("📊 Use os filtros laterais para selecionar loja e marca.")
 
 
 if __name__ == "__main__":
