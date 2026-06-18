@@ -11,6 +11,7 @@ import logging
 import traceback
 import re
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 try:
     from reportlab.lib.pagesizes import A4
@@ -26,7 +27,9 @@ from config import (
     PLANILHAS, DE_PARA_LOJAS, DE_PARA_LOJAS_REVERSO, 
     MAPEAMENTO_PDV_DRAFT_RAW, NOMES_MARCAS, ABAS_SEGURANCA,
     LOGOS_MARCAS, CORES_MARCAS, REGRAS_ESTOQUE_MINIMO,
-    COLUNAS_OBRIGATORIAS, TIMEOUT_DOWNLOAD, CACHE_TTL
+    COLUNAS_OBRIGATORIAS, TIMEOUT_DOWNLOAD, CACHE_TTL,
+    obter_url_exportacao, VERSAO, DATA_VERSAO, diagnosticar_configuracao,
+    esta_no_modo_privado, verificar_disponibilidade_gspread
 )
 
 logging.basicConfig(
@@ -123,6 +126,39 @@ details summary {
 ::-webkit-scrollbar-track { background: #0e1117; }
 ::-webkit-scrollbar-thumb { background: #007A33; border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: #D4AF37; }
+
+/* Rodapé fixo */
+.footer-rodape {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: linear-gradient(135deg, #0d1f14 0%, #080b0f 100%);
+    border-top: 2px solid #007A33;
+    padding: 8px 20px;
+    text-align: center;
+    font-size: 11px;
+    color: #6b7e8a;
+    z-index: 999;
+}
+.footer-rodape span {
+    color: #D4AF37;
+    font-weight: 600;
+}
+
+/* Placeholder para logos */
+.logo-placeholder {
+    width: 40px;
+    height: 40px;
+    background: linear-gradient(135deg, #1a3d25, #0d1f14);
+    border-radius: 6px;
+    display: inline-block;
+    animation: pulse 1.5s ease-in-out infinite;
+}
+@keyframes pulse {
+    0%, 100% { opacity: 0.6; }
+    50% { opacity: 1; }
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -187,6 +223,7 @@ def download_planilha_excel(url_planilha, nome_planilha):
         
     except Exception as e:
         logger.error(f"❌ Erro ao baixar {nome_planilha}: {str(e)}")
+        logger.error(traceback.format_exc())
         st.error(f"Falha ao carregar {nome_planilha}: {str(e)[:200]}")
         return None
 
@@ -328,6 +365,7 @@ def carregar_estoque_seguranca(seguranca_buffer):
                 
             except Exception as e:
                 logger.error(f"Erro ao processar aba {aba_nome} da segurança: {str(e)}")
+                logger.error(traceback.format_exc())
                 continue
         
         if dfs_abas:
@@ -417,8 +455,11 @@ def carregar_dados_principais(draft_buffer):
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def carregar_todos_os_dados():
+    """
+    Carrega todas as planilhas com downloads PARALELIZADOS para melhor performance.
+    """
     logger.info("=" * 60)
-    logger.info("INICIANDO CARREGAMENTO DE DADOS")
+    logger.info("INICIANDO CARREGAMENTO DE DADOS (MODO PARALELO)")
     logger.info("=" * 60)
     
     stats = {
@@ -428,47 +469,88 @@ def carregar_todos_os_dados():
         'skus_custo_maior': 0
     }
     
-    logger.info("Fase 1: Download das planilhas...")
+    # ==========================================================================
+    # FASE 1: DOWNLOAD PARALELO DAS 3 PLANILHAS
+    # ==========================================================================
+    logger.info("Fase 1: Download PARALELO das planilhas...")
+    st.session_state['progresso_atual'] = "Baixando planilhas em paralelo..."
     
-    buffer_draft = download_planilha_excel(
-        f"https://docs.google.com/spreadsheets/d/{PLANILHAS['draft_pdvs']['id']}/export?format=xlsx",
-        "DRAFT_PDVS"
-    )
+    # URLs das planilhas (usando função auxiliar do config.py)
+    urls_planilhas = {
+        'draft_pdvs': obter_url_exportacao('draft_pdvs'),
+        'estoque_seguranca': obter_url_exportacao('estoque_seguranca'),
+        'retaguarda': obter_url_exportacao('retaguarda')
+    }
     
-    buffer_seguranca = download_planilha_excel(
-        f"https://docs.google.com/spreadsheets/d/{PLANILHAS['estoque_seguranca']['id']}/export?format=xlsx",
-        "CONSULTA_DE_ESTOQUE"
-    )
+    # Download paralelo com ThreadPoolExecutor
+    buffers = {}
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        # Submete os 3 downloads
+        futures = {
+            executor.submit(download_planilha_excel, url, nome): nome
+            for nome, url in [
+                ('DRAFT_PDVS', urls_planilhas['draft_pdvs']),
+                ('CONSULTA_DE_ESTOQUE', urls_planilhas['estoque_seguranca']),
+                ('Planilha Retaguarda', urls_planilhas['retaguarda'])
+            ]
+        }
+        
+        # Coleta os resultados conforme vão completando
+        for future in as_completed(futures):
+            nome = futures[future]
+            try:
+                buffer = future.result()
+                if nome == 'DRAFT_PDVS':
+                    buffers['draft'] = buffer
+                elif nome == 'CONSULTA_DE_ESTOQUE':
+                    buffers['seguranca'] = buffer
+                elif nome == 'Planilha Retaguarda':
+                    buffers['retaguarda'] = buffer
+            except Exception as e:
+                logger.error(f"Erro no download de {nome}: {str(e)}")
+                logger.error(traceback.format_exc())
     
-    buffer_retaguarda = download_planilha_excel(
-        f"https://docs.google.com/spreadsheets/d/{PLANILHAS['retaguarda']['id']}/export?format=xlsx",
-        "Planilha Retaguarda"
-    )
+    logger.info("✅ Todos os downloads concluídos")
     
+    # ==========================================================================
+    # FASE 2: PROCESSAMENTO DOS DADOS
+    # ==========================================================================
     logger.info("Fase 2: Processamento dos dados...")
+    st.session_state['progresso_atual'] = "Processando planilha principal..."
     
-    dados_marcas, data_atualizacao = carregar_dados_principais(buffer_draft)
+    dados_marcas, data_atualizacao = carregar_dados_principais(buffers.get('draft'))
     if not dados_marcas:
         logger.error("Nenhum dado foi carregado da planilha principal")
         return {}, None, stats
     
-    df_estoque_seguranca = carregar_estoque_seguranca(buffer_seguranca)
-    df_retaguarda = carregar_planilha_retaguarda(buffer_retaguarda)
+    st.session_state['progresso_atual'] = "Carregando estoque de segurança..."
+    df_estoque_seguranca = carregar_estoque_seguranca(buffers.get('seguranca'))
+    
+    st.session_state['progresso_atual'] = "Carregando planilha de custos..."
+    df_retaguarda = carregar_planilha_retaguarda(buffers.get('retaguarda'))
     stats['total_skus_retaguarda'] = len(df_retaguarda) if not df_retaguarda.empty else 0
     
+    # ==========================================================================
+    # FASE 3: APLICANDO CUSTOS DA RETAGUARDA (OTIMIZADO)
+    # ==========================================================================
     logger.info("Fase 3: Aplicando custos da Retaguarda...")
+    st.session_state['progresso_atual'] = "Aplicando custos e calculando métricas..."
+    
+    # OTIMIZAÇÃO: Calcular df_update UMA VEZ antes do loop (evita recriação)
+    df_update_global = None
+    if not df_retaguarda.empty:
+        df_update_global = df_retaguarda[['PDV', 'SKU', 'CUSTO_RETARGUARDA']].copy()
+        df_update_global = df_update_global.set_index(['PDV', 'SKU'])
+        logger.info(f"DataFrame de custos preparado: {len(df_update_global)} registros")
     
     for nome_marca, df in dados_marcas.items():
         df['CUSTO_RETARGUARDA'] = 0.0
         
-        if not df_retaguarda.empty:
-            df_update = df_retaguarda[['PDV', 'SKU', 'CUSTO_RETARGUARDA']].copy()
-            df_update = df_update.set_index(['PDV', 'SKU'])
-            
+        if df_update_global is not None:
             idx = pd.MultiIndex.from_arrays([df['PDV'], df['SKU']])
-            mask = idx.isin(df_update.index)
+            mask = idx.isin(df_update_global.index)
             
-            df.loc[mask, 'CUSTO_RETARGUARDA'] = df_update.loc[idx[mask], 'CUSTO_RETARGUARDA'].values
+            df.loc[mask, 'CUSTO_RETARGUARDA'] = df_update_global.loc[idx[mask], 'CUSTO_RETARGUARDA'].values
             
             stats['skus_matcheados'] += int(mask.sum())
             stats['skus_sem_match'] += len(df) - int(mask.sum())
@@ -523,11 +605,21 @@ def carregar_todos_os_dados():
     logger.info(f"SKUs com custo > tabela: {stats['skus_custo_maior']}")
     logger.info("=" * 60)
     
+    st.session_state['progresso_atual'] = "Carregamento concluído!"
+    
     return dados_marcas, data_atualizacao, stats
 
 
-def exibir_kpi_card(col, icone, titulo, valor_fmt, delta_texto=None, cor_delta="#ff4b4b"):
+def exibir_kpi_card(col, icone, titulo, valor_fmt, delta_texto=None, cor_delta="#ff4b4b", help_text=None):
+    """
+    Exibe card de KPI com tooltip opcional.
+    
+    Args:
+        help_text: Texto explicativo exibido ao passar o mouse (tooltip)
+    """
     delta_html = f'<div style="font-size:12px;color:{cor_delta};margin-top:4px;">{delta_texto}</div>' if delta_texto else ''
+    help_icon = f'<span title="{help_text}" style="float:right;cursor:help;opacity:0.6;">ℹ️</span>' if help_text else ''
+    
     col.markdown(f"""
     <div style="
         background: linear-gradient(135deg,#111820,#0d1f14);
@@ -535,7 +627,9 @@ def exibir_kpi_card(col, icone, titulo, valor_fmt, delta_texto=None, cor_delta="
         border-radius:10px; padding:18px 20px;
         box-shadow:0 4px 16px rgba(0,122,51,0.15);
         min-height:110px;
+        position:relative;
     ">
+        {help_icon}
         <div style="font-size:22px;margin-bottom:4px;">{icone}</div>
         <div style="font-size:12px;color:#8da9be;margin-bottom:6px;">{titulo}</div>
         <div style="font-size:26px;font-weight:700;color:#D4AF37;
@@ -552,9 +646,15 @@ def exibir_titulo_marca(nome_marca, tamanho_logo=30):
         logo_path = LOGOS_MARCAS.get(nome_marca, '')
         if logo_path:
             try:
-                st.image(logo_path, width=tamanho_logo)
-            except Exception:
+                if os.path.exists(logo_path):
+                    st.image(logo_path, width=tamanho_logo)
+                else:
+                    # Placeholder visual enquanto logo não carrega
+                    st.markdown('<div class="logo-placeholder"></div>', unsafe_allow_html=True)
+                    logger.warning(f"Logo não encontrada: {logo_path}")
+            except Exception as e:
                 st.write("🏷️")
+                logger.error(f"Erro ao carregar logo {logo_path}: {str(e)}")
         else:
             st.write("🏷️")
     with col_nome:
@@ -607,8 +707,8 @@ def gerar_pdf_dashboard(dados_filtrados, pdv_selecionado, loja_selecionada_nome,
         if os.path.exists('logo_cp_fani.png'):
             logo = RLImage('logo_cp_fani.png', width=3*cm, height=2*cm)
             elementos.append(logo)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.error(f"Erro ao carregar logo no PDF: {str(e)}")
 
     elementos.append(Paragraph("Painel de Performance de Estoque NSF · CP Fani", estilo_titulo))
     elementos.append(Paragraph(f"PDV: {loja_selecionada_nome}  |  Marca: {marca_selecionada}", estilo_subtitulo))
@@ -719,12 +819,26 @@ def gerar_pdf_dashboard(dados_filtrados, pdv_selecionado, loja_selecionada_nome,
         return buffer
     except Exception as e:
         logger.error(f"Erro ao gerar PDF: {str(e)[:200]}")
+        logger.error(traceback.format_exc())
         return None
 
 
 def main():
-    with st.spinner("🔄 Carregando dados das planilhas..."):
+    # ==========================================================================
+    # INDICADOR DE PROGRESSO POR ETAPA
+    # ==========================================================================
+    progresso_placeholder = st.empty()
+    progresso_placeholder.info("🔄 Iniciando carregamento das planilhas...")
+    
+    try:
         dados_marcas, data_atualizacao, stats = carregar_todos_os_dados()
+    except Exception as e:
+        logger.error(f"Erro crítico no carregamento: {str(e)}")
+        logger.error(traceback.format_exc())
+        st.error(f"❌ Erro crítico: {str(e)}")
+        st.stop()
+    
+    progresso_placeholder.empty()  # Remove indicador após carregamento
     
     horario_carregamento = obter_horario_brasilia()
     
@@ -758,9 +872,13 @@ def main():
     
     with col_logo:
         try:
-            st.image("logo_cp_fani.png", width=180)
-        except Exception:
-            pass
+            if os.path.exists("logo_cp_fani.png"):
+                st.image("logo_cp_fani.png", width=180)
+            else:
+                st.markdown('<div class="logo-placeholder" style="width:180px;height:120px;"></div>', unsafe_allow_html=True)
+                logger.warning("Logo CP Fani não encontrada")
+        except Exception as e:
+            logger.error(f"Erro ao carregar logo principal: {str(e)}")
     
     with col_info:
         st.markdown(f"""
@@ -783,15 +901,27 @@ def main():
     
     st.markdown("---")
     
+    # ==========================================================================
+    # FEEDBACK VISUAL PARA FALHAS NAS PLANILHAS AUXILIARES
+    # ==========================================================================
     if stats.get('total_skus_retaguarda', 0) > 0:
         with st.expander("🔍 Diagnóstico de Custos (clique para ver)", expanded=False):
             col_d1, col_d2, col_d3, col_d4 = st.columns(4)
-            col_d1.metric("SKUs na Retaguarda", f"{stats['total_skus_retaguarda']:,}")
-            col_d2.metric("SKUs com custo", f"{stats['skus_matcheados']:,}")
-            col_d3.metric("SKUs sem custo", f"{stats['skus_sem_match']:,}")
-            col_d4.metric("Custo > Tabela", f"{stats['skus_custo_maior']:,}")
+            col_d1.metric("SKUs na Retaguarda", f"{stats['total_skus_retaguarda']:,}",
+                         help="Total de registros de custo encontrados na planilha Retaguarda")
+            col_d2.metric("SKUs com custo", f"{stats['skus_matcheados']:,}",
+                         help="SKUs que encontraram correspondência entre planilha principal e Retaguarda")
+            col_d3.metric("SKUs sem custo", f"{stats['skus_sem_match']:,}",
+                         help="SKUs sem custo na Retaguarda (usando Preço de Tabela como fallback)")
+            col_d4.metric("Custo > Tabela", f"{stats['skus_custo_maior']:,}",
+                         help="SKUs onde o custo da Retaguarda é maior que o Preço de Tabela")
     else:
-        st.warning("⚠️ Planilha Retaguarda não carregada. Usando Preço de Tabela como custo.")
+        st.warning("⚠️ **Planilha Retaguarda não carregada.** Usando Preço de Tabela como custo para todos os SKUs.")
+    
+    # Verifica se estoque de segurança foi carregado (stats não tem info direta, mas podemos inferir)
+    # Adiciona aviso genérico se necessário
+    if stats.get('skus_sem_match', 0) > 0 and stats.get('total_skus_retaguarda', 0) == 0:
+        st.info("ℹ️ **Nota:** Planilhas auxiliares (Retaguarda/Segurança) não disponíveis. Usando valores padrão.")
     
     st.markdown("---")
     
@@ -805,7 +935,11 @@ def main():
     
     opcoes_selectbox = ["Todas as Lojas"] + [DE_PARA_LOJAS.get(pdv, f"PDV {pdv}") for pdv in todos_pdvs]
     
-    loja_selecionada_nome = st.sidebar.selectbox("Selecione a Loja / PDV:", opcoes_selectbox)
+    loja_selecionada_nome = st.sidebar.selectbox(
+        "Selecione a Loja / PDV:", 
+        opcoes_selectbox,
+        help="Escolha um PDV específico ou 'Todas as Lojas' para ver o consolidado geral"
+    )
     
     if loja_selecionada_nome == "Todas as Lojas":
         pdv_selecionado = 'TODAS'
@@ -819,7 +953,11 @@ def main():
     
     st.sidebar.subheader("Filtro de Marca")
     opcoes_marca = ["Todas as Marcas"] + list(dados_marcas.keys())
-    marca_selecionada = st.sidebar.selectbox("Selecione a Marca:", opcoes_marca)
+    marca_selecionada = st.sidebar.selectbox(
+        "Selecione a Marca:", 
+        opcoes_marca,
+        help="Filtre por uma marca específica ou veja todas consolidadas"
+    )
     
     st.sidebar.markdown("**Marcas disponíveis:**")
     col_logos_sidebar = st.sidebar.columns(len(dados_marcas))
@@ -828,13 +966,16 @@ def main():
             logo_path = LOGOS_MARCAS.get(nome_marca, '')
             if logo_path:
                 try:
-                    st.image(logo_path, width=40)
-                except Exception:
-                    pass
+                    if os.path.exists(logo_path):
+                        st.image(logo_path, width=40)
+                    else:
+                        st.markdown('<div class="logo-placeholder"></div>', unsafe_allow_html=True)
+                except Exception as e:
+                    logger.error(f"Erro ao carregar logo {logo_path}: {str(e)}")
             st.caption(nome_marca)
     
     st.sidebar.markdown("---")
-    if st.sidebar.button("🔄 Forçar Atualização"):
+    if st.sidebar.button("🔄 Forçar Atualização", help="Limpa o cache e recarrega todos os dados das planilhas"):
         st.cache_data.clear()
         st.rerun()
     
@@ -894,21 +1035,33 @@ def main():
     
     col1, col2, col3, col4 = st.columns(4)
     
-    exibir_kpi_card(col1, "💰", "Valor em Estoque", f"R$ {v_estoque_atual_total:,.2f}")
-    exibir_kpi_card(col2, "📉", "Estoque Mínimo", f"R$ {v_estoque_min_total:,.2f}")
+    exibir_kpi_card(
+        col1, "💰", "Valor em Estoque", f"R$ {v_estoque_atual_total:,.2f}",
+        help_text="Soma de (Estoque Atual × Preço Tabela) para todos os SKUs"
+    )
+    exibir_kpi_card(
+        col2, "📉", "Estoque Mínimo", f"R$ {v_estoque_min_total:,.2f}",
+        help_text="Soma de (Estoque Mínimo × Preço Tabela) - valor ideal de estoque"
+    )
     
     pct_excesso = f"{((v_excesso_total_total/v_estoque_atual_total)*100 if v_estoque_atual_total > 0 else 0):.1f}%"
-    exibir_kpi_card(col3, "⚠️", "Capital Preso", f"R$ {v_excesso_total_total:,.2f}", 
-                   delta_texto=f"{pct_excesso} do estoque", cor_delta="#f59e0b")
+    exibir_kpi_card(
+        col3, "⚠️", "Capital Preso", f"R$ {v_excesso_total_total:,.2f}", 
+        delta_texto=f"{pct_excesso} do estoque", cor_delta="#f59e0b",
+        help_text="Valor do estoque acima do mínimo (Estoque Atual - Estoque Mínimo) × Preço Tabela"
+    )
     
-    exibir_kpi_card(col4, "🚨", "Risco de Ruptura", f"R$ {v_falta_total_total:,.2f}", 
-                   delta_texto="Abaixo do Mínimo", cor_delta="#ef4444")
+    exibir_kpi_card(
+        col4, "🚨", "Risco de Ruptura", f"R$ {v_falta_total_total:,.2f}", 
+        delta_texto="Abaixo do Mínimo", cor_delta="#ef4444",
+        help_text="Valor necessário para atingir o estoque mínimo (Estoque Mínimo - Estoque Atual) × Preço Tabela"
+    )
     
     st.markdown("---")
     
-    # ==========================================
-    # NOVA TABELA: COBERTURA MÉDIA POR CLASSE (Atual + Trânsito)
-    # ==========================================
+    # ==========================================================================
+    # COBERTURA MÉDIA POR CLASSE
+    # ==========================================================================
     st.subheader("📦 Cobertura Média por Classe (Estoque Atual + Trânsito)")
     
     df_cobertura_classes = pd.DataFrame()
@@ -920,12 +1073,10 @@ def main():
             df_loja = df_completo[df_completo['PDV'] == pdv_selecionado]
         
         if not df_loja.empty and 'Classe' in df_loja.columns:
-            # Calcula a média: (Estoque Atual + Estoque em Trânsito) / 2
             df_loja['Cobertura_Media'] = (df_loja['Estoque Atual'] + df_loja['Estoque em Trânsito']) / 2
             
-            # CORREÇÃO: Usa mean() em vez de sum() para calcular a MÉDIA por classe
             df_classe = df_loja.groupby('Classe').agg({
-                'Cobertura_Media': 'mean',  # MÉDIA em vez de soma
+                'Cobertura_Media': 'mean',
                 'SKU': 'count'
             }).reset_index()
             df_classe.columns = ['Classe', 'Cobertura Média Atual+Transito', 'Qtd SKUs']
@@ -935,35 +1086,29 @@ def main():
     
     if not df_cobertura_classes.empty:
         if marca_selecionada == "Todas as Marcas":
-            # Pivot: Classe nas linhas, Marcas nas colunas
             df_pivot_cob = df_cobertura_classes.pivot_table(
                 values='Cobertura Média Atual+Transito', 
                 index='Classe', 
                 columns='Marca', 
-                aggfunc='mean',  # MÉDIA
+                aggfunc='mean',
                 fill_value=0
             ).reset_index()
             
-            # Adiciona coluna Total Geral (média geral)
             colunas_marcas_cob = [col for col in df_pivot_cob.columns if col != 'Classe']
             df_pivot_cob['Média Geral'] = df_pivot_cob[colunas_marcas_cob].mean(axis=1)
             
-            # Formata valores como inteiros arredondados
             for col in colunas_marcas_cob + ['Média Geral']:
                 df_pivot_cob[col] = df_pivot_cob[col].apply(lambda x: f"{int(round(x)):,}")
             
             st.dataframe(df_pivot_cob, use_container_width=True, hide_index=True)
         else:
-            # Mostra apenas a marca selecionada
             df_exibicao_cob = df_cobertura_classes[['Classe', 'Cobertura Média Atual+Transito', 'Qtd SKUs']].copy()
             df_exibicao_cob = df_exibicao_cob.sort_values('Classe')
             
-            # Formata como inteiro arredondado
             df_exibicao_cob['Cobertura Média Atual+Transito'] = df_exibicao_cob['Cobertura Média Atual+Transito'].apply(lambda x: f"{int(round(x)):,}")
             
             st.dataframe(df_exibicao_cob, use_container_width=True, hide_index=True)
         
-        # Gráfico de cobertura por classe
         fig_cobertura = go.Figure()
         
         if marca_selecionada == "Todas as Marcas":
@@ -996,12 +1141,14 @@ def main():
             title='Média de Cobertura por Classe'
         )
         st.plotly_chart(fig_cobertura, use_container_width=True)
+    else:
+        st.info("ℹ️ Nenhum dado de cobertura disponível para os filtros selecionados.")
     
     st.markdown("---")
     
-    # ==========================================
+    # ==========================================================================
     # GRÁFICO COMPARATIVO POR MARCA
-    # ==========================================
+    # ==========================================================================
     if marca_selecionada == "Todas as Marcas":
         st.subheader("📊 Comparativo entre Marcas")
 
@@ -1047,9 +1194,9 @@ def main():
                                         height=400, title='Custo Total por Marca', yaxis_title='Valor (R$)')
                 st.plotly_chart(fig_custo, use_container_width=True)
 
-    # ==========================================
+    # ==========================================================================
     # CUSTO POR CURVA
-    # ==========================================
+    # ==========================================================================
     st.markdown("---")
     st.subheader("📊 Custo Total por Curva de Produto")
 
@@ -1104,9 +1251,9 @@ def main():
                                 height=400, xaxis_title='Curva', yaxis_title='Custo Total (R$)', title='Distribuição de Custo por Curva')
         st.plotly_chart(fig_custo, use_container_width=True)
 
-    # ==========================================
+    # ==========================================================================
     # ANÁLISE POR CATEGORIA
-    # ==========================================
+    # ==========================================================================
     st.markdown("---")
     st.subheader("📊 Análise por Categoria")
 
@@ -1141,9 +1288,9 @@ def main():
                               height=400, xaxis_title='Categoria', yaxis_title='Valor (R$)', title='Estoque por Categoria')
         st.plotly_chart(fig_cat, use_container_width=True)
 
-    # ==========================================
-    # TABELAS DE EXCESSOS E FALTAS
-    # ==========================================
+    # ==========================================================================
+    # TABELAS DE EXCESSOS E FALTAS (COM MENSAGENS "NENHUM ITEM")
+    # ==========================================================================
     st.markdown("---")
 
     for nome_marca, df_completo in dados_filtrados.items():
@@ -1166,16 +1313,19 @@ def main():
             ][['SKU', 'Descrição', 'Classe', 'Estoque Atual', 'Estoque_Minimo_Qtd', 'Qtd_Excesso', 'Preço de Custo', 'Valor_Excesso']
             ].rename(columns={'Preço de Custo': 'Preço Considerado'}).sort_values(by='Valor_Excesso', ascending=False)
 
-            total_excesso_qtd = int(df_excesso_tabela['Qtd_Excesso'].sum()) if not df_excesso_tabela.empty else 0
-            total_excesso_val = df_excesso_tabela['Valor_Excesso'].sum() if not df_excesso_tabela.empty else 0
-            skus_excesso = len(df_excesso_tabela)
-            col_e1, col_e2, col_e3 = st.columns(3)
-            col_e1.metric("SKUs com excesso", skus_excesso)
-            col_e2.metric("Unidades em excesso", f"{total_excesso_qtd:,}")
-            col_e3.metric("Valor total em excesso", f"R$ {total_excesso_val:,.2f}")
+            if df_excesso_tabela.empty:
+                st.info("✅ Nenhum excesso crítico encontrado para esta seleção.")
+            else:
+                total_excesso_qtd = int(df_excesso_tabela['Qtd_Excesso'].sum())
+                total_excesso_val = df_excesso_tabela['Valor_Excesso'].sum()
+                skus_excesso = len(df_excesso_tabela)
+                col_e1, col_e2, col_e3 = st.columns(3)
+                col_e1.metric("SKUs com excesso", skus_excesso)
+                col_e2.metric("Unidades em excesso", f"{total_excesso_qtd:,}")
+                col_e3.metric("Valor total em excesso", f"R$ {total_excesso_val:,.2f}")
 
-            st.dataframe(df_excesso_tabela.style.format({'Preço Considerado': 'R$ {:.2f}', 'Valor_Excesso': 'R$ {:.2f}'}),
-                         use_container_width=True, height=280)
+                st.dataframe(df_excesso_tabela.style.format({'Preço Considerado': 'R$ {:.2f}', 'Valor_Excesso': 'R$ {:.2f}'}),
+                             use_container_width=True, height=280)
 
         with col_tab2:
             st.write("### 🚨 Produtos Críticos em Falta / Ruptura")
@@ -1183,22 +1333,25 @@ def main():
                 ['SKU', 'Descrição', 'Classe', 'Estoque Atual', 'Estoque_Minimo_Qtd', 'Qtd_Falta', 'Preço de Custo', 'Valor_Falta']
             ].rename(columns={'Preço de Custo': 'Preço Considerado'}).sort_values(by='Valor_Falta', ascending=False)
 
-            total_falta_qtd = int(df_falta_tabela['Qtd_Falta'].sum()) if not df_falta_tabela.empty else 0
-            total_falta_val = df_falta_tabela['Valor_Falta'].sum() if not df_falta_tabela.empty else 0
-            skus_falta = len(df_falta_tabela)
-            col_f1, col_f2, col_f3 = st.columns(3)
-            col_f1.metric("SKUs em falta", skus_falta)
-            col_f2.metric("Unidades em falta", f"{total_falta_qtd:,}")
-            col_f3.metric("Risco financeiro", f"R$ {total_falta_val:,.2f}")
+            if df_falta_tabela.empty:
+                st.info("✅ Nenhum produto em falta encontrado para esta seleção.")
+            else:
+                total_falta_qtd = int(df_falta_tabela['Qtd_Falta'].sum())
+                total_falta_val = df_falta_tabela['Valor_Falta'].sum()
+                skus_falta = len(df_falta_tabela)
+                col_f1, col_f2, col_f3 = st.columns(3)
+                col_f1.metric("SKUs em falta", skus_falta)
+                col_f2.metric("Unidades em falta", f"{total_falta_qtd:,}")
+                col_f3.metric("Risco financeiro", f"R$ {total_falta_val:,.2f}")
 
-            st.dataframe(df_falta_tabela.style.format({'Preço Considerado': 'R$ {:.2f}', 'Valor_Falta': 'R$ {:.2f}'}),
-                         use_container_width=True, height=280)
+                st.dataframe(df_falta_tabela.style.format({'Preço Considerado': 'R$ {:.2f}', 'Valor_Falta': 'R$ {:.2f}'}),
+                             use_container_width=True, height=280)
 
         st.markdown("---")
 
-    # ==========================================
+    # ==========================================================================
     # EXPORTAR PDF
-    # ==========================================
+    # ==========================================================================
     st.markdown("---")
     pdf_buffer = gerar_pdf_dashboard(
         dados_filtrados=dados_filtrados,
@@ -1219,8 +1372,21 @@ def main():
             data=pdf_buffer,
             file_name=f"relatorio_estoque_{pdv_selecionado if pdv_selecionado != 'TODAS' else 'TODAS_LOJAS'}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
             mime="application/pdf",
-            type="primary"
+            type="primary",
+            help="Gera um relatório PDF com os KPIs e tabelas de excessos/faltas"
         )
+    
+    # ==========================================================================
+    # RODAPÉ FIXO COM VERSÃO
+    # ==========================================================================
+    st.markdown(f"""
+    <div class="footer-rodape">
+        Dashboard de Estoque NSF · CP Fani | 
+        Versão <span>{VERSAO}</span> ({DATA_VERSAO}) | 
+        Atualizado em <span>{horario_exibicao}</span>
+    </div>
+    <div style="height: 40px;"></div>
+    """, unsafe_allow_html=True)
 
 
 if __name__ == "__main__":
