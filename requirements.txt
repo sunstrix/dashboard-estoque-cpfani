@@ -1,21 +1,47 @@
 # ==========================================
 # DEPENDÊNCIAS DO DASHBOARD ESTOQUE CPFANI
 # ==========================================
+# Projeto: Painel de Performance de Estoque NSF - CP Fani
+# Versão: 2.1.0
+# Data: 2026-06-18
+# ==========================================
 
 # Framework principal do Dashboard
-streamlit
+streamlit>=1.28.0
 
 # Manipulação e análise de dados
-pandas
-openpyxl
+pandas>=2.0.0
+numpy>=1.24.0
+openpyxl>=3.1.0
 
 # Visualização de dados
-plotly
+plotly>=5.18.0
 
-# Integração segura com Google Sheets
-gspread
-google-auth
+# HTTP requests e retry automático
+requests>=2.31.0
+urllib3>=2.0.0
+
+# Integração com Google Sheets (modo privado - preparado para futuro)
+gspread>=5.12.0
+google-auth>=2.23.0
 
 # Gerenciamento seguro de variáveis de ambiente (credenciais)
-python-dotenv
-reportlab
+python-dotenv>=1.0.0
+
+# Geração de relatórios em PDF
+reportlab>=4.0.0
+
+# ==========================================
+# NOTAS DE INSTALAÇÃO
+# ==========================================
+# Para instalar todas as dependências:
+#   pip install -r requirements.txt
+#
+# Para atualizar dependências existentes:
+#   pip install -r requirements.txt --upgrade
+#
+# Dependências opcionais (para desenvolvimento):
+#   black>=23.0.0          # Formatação de código
+#   flake8>=6.0.0          # Linting
+#   pytest>=7.0.0          # Testes unitários
+# ==========================================
