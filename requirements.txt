@@ -2,8 +2,14 @@
 # DEPENDÊNCIAS DO DASHBOARD ESTOQUE CPFANI
 # ==========================================
 # Projeto: Painel de Performance de Estoque NSF - CP Fani
-# Versão: 2.1.0
+# Versão: 2.2.0
 # Data: 2026-06-18
+# ==========================================
+# Novidades v2.2.0:
+# - Cálculo de DDV (Demanda Diária de Venda)
+# - Cobertura de Estoque por Classe
+# - Filtro global de SKUs Ignorados
+# - Downloads paralelos de 4 planilhas
 # ==========================================
 
 # Framework principal do Dashboard
@@ -20,6 +26,9 @@ plotly>=5.18.0
 # HTTP requests e retry automático
 requests>=2.31.0
 urllib3>=2.0.0
+
+# Processamento paralelo (ThreadPoolExecutor)
+# Nota: concurrent.futures é parte da biblioteca padrão do Python 3.2+
 
 # Integração com Google Sheets (modo privado - preparado para futuro)
 gspread>=5.12.0
