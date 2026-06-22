@@ -94,6 +94,12 @@ PLANILHAS = {
         "nome": "Planilha Retaguarda",
         "descricao": "Custos dos produtos",
         "coluna_custo": "CUSTO"  # Nome da coluna que contém o valor de custo
+    },
+    "ignorados": {
+        "id": "13QBNlk9M435Jos0Q-U77tuF-BINXSycmJmV8rZOk92o",
+        "nome": "SKUs Ignorados",
+        "descricao": "SKUs que devem ser excluídos de todos os cálculos",
+        "coluna_sku": "SKU"  # Coluna que contém os SKUs ignorados
     }
 }
 
@@ -187,8 +193,26 @@ REGRAS_ESTOQUE_MINIMO = {'A': 15, 'B': 10, 'C': 5, 'E': 2}
 COLUNAS_OBRIGATORIAS = {
     "draft_pdvs": ['PDV', 'SKU', 'Estoque Atual', 'Preço tabela'],
     "estoque_seguranca": ['PDV', 'SKU'],
-    "retaguarda": ['SKU']  # Pelo menos SKU é obrigatório
+    "retaguarda": ['SKU'],  # Pelo menos SKU é obrigatório
+    "ignorados": ['SKU']  # Coluna com SKUs a serem ignorados
 }
+
+# ==============================================================================
+# CONSTANTES DE CÁLCULO DE DDV (Demanda Diária de Venda)
+# ==============================================================================
+# O DDV é calculado somando as colunas de histórico (I até Z) e dividindo por 365 dias
+# Colunas I até Z correspondem aos índices 8 até 25 (0-indexed)
+COLUNAS_HISTORICO_INICIO = 8   # Índice da coluna I (0-indexed)
+COLUNAS_HISTORICO_FIM = 26     # Índice após coluna Z (exclusive, 0-indexed)
+DIAS_ANO = 365                 # Dias no ano para cálculo do DDV
+
+# Fórmula do DDV:
+# DDV = Soma(colunas_I_ate_Z) / DIAS_ANO
+#
+# Fórmula da Cobertura de Estoque:
+# Cobertura = Estoque_Atual / DDV
+#
+# SKUs com DDV = 0 devem ser tratados como caso especial (evitar divisão por zero)
 
 # Timeout para downloads (segundos)
 TIMEOUT_DOWNLOAD = 120
@@ -199,7 +223,7 @@ CACHE_TTL = 3600
 # ==============================================================================
 # VERSÃO DO PROJETO
 # ==============================================================================
-VERSAO = "2.1.0"
+VERSAO = "2.2.0"
 DATA_VERSAO = "2026-06-18"
 
 # ==============================================================================
@@ -212,7 +236,7 @@ def obter_url_exportacao(chave_planilha: str) -> str:
     
     Args:
         chave_planilha: Chave da planilha no dicionário PLANILHAS 
-                       (ex: "draft_pdvs", "estoque_seguranca", "retaguarda")
+                       (ex: "draft_pdvs", "estoque_seguranca", "retaguarda", "ignorados")
     
     Returns:
         URL completa de exportação em formato Excel
