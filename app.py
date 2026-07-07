@@ -30,8 +30,21 @@ from config import (
     COLUNAS_OBRIGATORIAS, TIMEOUT_DOWNLOAD, CACHE_TTL,
     obter_url_exportacao, VERSAO, DATA_VERSAO, diagnosticar_configuracao,
     esta_no_modo_privado, verificar_disponibilidade_gspread,
-    COLUNAS_HISTORICO_INICIO, COLUNAS_HISTORICO_FIM, DIAS_ANO
+    COLUNAS_HISTORICO_INICIO, COLUNAS_HISTORICO_FIM, DIAS_ANO,
+    # Novas importações para SharePoint e detecção dinâmica
+    MODO_ACESSO, PLANILHAS_SHAREPOINT, obter_url_sharepoint,
+    esta_no_modo_sharepoint, esta_no_modo_publico,
+    detectar_colunas_historico, COLUNA_CLASSE_SEGMENTADA
 )
+
+# Importa módulo de utilitários do SharePoint
+try:
+    from sharepoint_utils import baixar_arquivo_sharepoint, resolver_url_download_sharepoint
+    SHAREPOINT_UTILS_AVAILABLE = True
+except ImportError:
+    SHAREPOINT_UTILS_AVAILABLE = False
+    logger = logging.getLogger(__name__)
+    logger.warning("⚠️ sharepoint_utils.py não encontrado. Modo SharePoint indisponível.")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -42,7 +55,7 @@ logger = logging.getLogger(__name__)
 
 st.set_page_config(
     page_title="Painel de Performance de Estoque NSF - CP Fani",
-    page_icon="📊",
+    page_icon="",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -223,7 +236,38 @@ def download_planilha_excel(url_planilha, nome_planilha):
         return BytesIO(content)
         
     except Exception as e:
-        logger.error(f"❌ Erro ao baixar {nome_planilha}: {str(e)}")
+        logger.error(f" Erro ao baixar {nome_planilha}: {str(e)}")
+        logger.error(traceback.format_exc())
+        st.error(f"Falha ao carregar {nome_planilha}: {str(e)[:200]}")
+        return None
+
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def download_planilha_sharepoint(url_compartilhamento, nome_planilha):
+    """
+    Download de planilha via SharePoint usando resolução automática de URL.
+    Mantém a mesma interface que download_planilha_excel para compatibilidade.
+    """
+    if not SHAREPOINT_UTILS_AVAILABLE:
+        logger.error("❌ sharepoint_utils.py não disponível")
+        st.error("Módulo SharePoint não encontrado. Verifique sharepoint_utils.py")
+        return None
+    
+    logger.info(f"Iniciando download SharePoint: {nome_planilha}")
+    
+    try:
+        buffer = baixar_arquivo_sharepoint(url_compartilhamento, nome_planilha)
+        
+        if buffer:
+            logger.info(f"✅ Download SharePoint concluído: {nome_planilha}")
+            return buffer
+        else:
+            logger.error(f"❌ Falha no download SharePoint: {nome_planilha}")
+            st.error(f"Falha ao carregar {nome_planilha} do SharePoint")
+            return None
+    
+    except Exception as e:
+        logger.error(f"❌ Erro ao baixar {nome_planilha} do SharePoint: {str(e)}")
         logger.error(traceback.format_exc())
         st.error(f"Falha ao carregar {nome_planilha}: {str(e)[:200]}")
         return None
@@ -434,6 +478,11 @@ def carregar_estoque_seguranca(seguranca_buffer):
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def carregar_dados_principais(draft_buffer):
+    """
+    Carrega planilha principal DRAFT_PDVS com DETECÇÃO DINÂMICA de colunas de histórico.
+    Usa regex para identificar colunas "Histórico de Vendas do Ciclo <6 dígitos>"
+    e calcula DDV automaticamente, tornando o código resiliente a mudanças na estrutura.
+    """
     logger.info("Carregando planilha principal DRAFT_PDVS...")
     
     try:
@@ -475,6 +524,12 @@ def carregar_dados_principais(draft_buffer):
                 df['Preço tabela'] = pd.to_numeric(df['Preço tabela'], errors='coerce').fillna(0)
                 df['SKU'] = df['SKU'].apply(normalizar_sku)
                 
+                # NOVA: Preserva coluna "Classe Segmentada" se existir
+                if COLUNA_CLASSE_SEGMENTADA in df.columns:
+                    logger.info(f"✅ Coluna '{COLUNA_CLASSE_SEGMENTADA}' encontrada e preservada")
+                else:
+                    logger.warning(f"Aba {aba_excel}: coluna '{COLUNA_CLASSE_SEGMENTADA}' não encontrada")
+                
                 # Coluna Estoque em Trânsito
                 colunas_transito = ['Estoque em Trânsito', 'Estoque em Transito', 'Estoque Transito', 
                                    'Em Trânsito', 'Em Transito', 'Trânsito', 'Transito']
@@ -487,18 +542,21 @@ def carregar_dados_principais(draft_buffer):
                     df['Estoque em Trânsito'] = 0
                     logger.warning(f"Aba {aba_excel}: coluna 'Estoque em Trânsito' não encontrada. Usando 0.")
                 
-                # Calcula DDV somando colunas I até Z (índices 8 a 25)
+                # ==================================================================
+                # NOVO: CÁLCULO DE DDV COM DETECÇÃO DINÂMICA POR REGEX
+                # ==================================================================
                 try:
-                    # Verifica se há colunas suficientes
-                    if len(df.columns) > COLUNAS_HISTORICO_FIM:
-                        colunas_hist = df.columns[COLUNAS_HISTORICO_INICIO:COLUNAS_HISTORICO_FIM]
+                    # Detecta colunas de histórico dinamicamente
+                    colunas_historico = detectar_colunas_historico(df.columns)
+                    
+                    if colunas_historico:
                         # Converte todas as colunas para numérico e soma
-                        df_hist = df[colunas_hist].apply(pd.to_numeric, errors='coerce').fillna(0)
+                        df_hist = df[colunas_historico].apply(pd.to_numeric, errors='coerce').fillna(0)
                         df['Historico_Total'] = df_hist.sum(axis=1)
                         df['DDV'] = df['Historico_Total'] / DIAS_ANO
-                        logger.info(f"✅ DDV calculado: {len(colunas_hist)} colunas de histórico somadas")
+                        logger.info(f"✅ DDV calculado: {len(colunas_historico)} colunas de histórico somadas")
                     else:
-                        logger.warning(f"Aba {aba_excel}: colunas insuficientes para histórico. Usando DDV=0.")
+                        logger.warning(f"Aba {aba_excel}: nenhuma coluna de histórico detectada. Usando DDV=0.")
                         df['Historico_Total'] = 0
                         df['DDV'] = 0
                 except Exception as e_ddv:
@@ -507,7 +565,6 @@ def carregar_dados_principais(draft_buffer):
                     df['DDV'] = 0
                 
                 # Calcula Cobertura de Estoque = Estoque Atual / DDV
-                # Tratamento: se DDV = 0, cobertura = NaN (para não distorcer médias)
                 df['Cobertura_Estoque'] = np.where(
                     df['DDV'] > 0,
                     df['Estoque Atual'] / df['DDV'],
@@ -534,11 +591,13 @@ def carregar_dados_principais(draft_buffer):
 def carregar_todos_os_dados():
     """
     Carrega todas as planilhas com downloads PARALELIZADOS.
+    Suporta tanto Google Sheets quanto SharePoint baseado no MODO_ACESSO.
     Aplica filtro de SKUs ignorados em todos os dados.
     Calcula DDV e Cobertura de Estoque para cada SKU.
     """
     logger.info("=" * 60)
-    logger.info("INICIANDO CARREGAMENTO DE DADOS (MODO PARALELO)")
+    logger.info("INICIANDO CARREGAMENTO DE DADOS")
+    logger.info(f"MODO_ACESSO: {MODO_ACESSO}")
     logger.info("=" * 60)
     
     stats = {
@@ -547,7 +606,8 @@ def carregar_todos_os_dados():
         'skus_sem_match': 0,
         'skus_custo_maior': 0,
         'skus_ignorados': 0,
-        'skus_ignorados_filtrados': 0
+        'skus_ignorados_filtrados': 0,
+        'modo_acesso': MODO_ACESSO
     }
     
     # ==========================================================================
@@ -556,40 +616,86 @@ def carregar_todos_os_dados():
     logger.info("Fase 1: Download PARALELO das planilhas...")
     st.session_state['progresso_atual'] = "Baixando planilhas em paralelo..."
     
-    urls_planilhas = {
-        'draft_pdvs': obter_url_exportacao('draft_pdvs'),
-        'estoque_seguranca': obter_url_exportacao('estoque_seguranca'),
-        'retaguarda': obter_url_exportacao('retaguarda'),
-        'ignorados': obter_url_exportacao('ignorados')
-    }
-    
-    buffers = {}
-    with ThreadPoolExecutor(max_workers=4) as executor:
-        futures = {
-            executor.submit(download_planilha_excel, url, nome): nome
-            for nome, url in [
-                ('DRAFT_PDVS', urls_planilhas['draft_pdvs']),
-                ('CONSULTA_DE_ESTOQUE', urls_planilhas['estoque_seguranca']),
-                ('Planilha Retaguarda', urls_planilhas['retaguarda']),
-                ('SKUs Ignorados', urls_planilhas['ignorados'])
-            ]
+    # Determina fonte de dados baseado no modo
+    if esta_no_modo_sharepoint():
+        logger.info(" Usando fonte de dados: SHAREPOINT")
+        if not SHAREPOINT_UTILS_AVAILABLE:
+            st.error("❌ Modo SharePoint selecionado mas sharepoint_utils.py não está disponível")
+            return {}, None, stats
+        
+        # URLs SharePoint
+        urls_planilhas = {
+            chave: config['url'] 
+            for chave, config in PLANILHAS_SHAREPOINT.items()
         }
         
-        for future in as_completed(futures):
-            nome = futures[future]
-            try:
-                buffer = future.result()
-                if nome == 'DRAFT_PDVS':
-                    buffers['draft'] = buffer
-                elif nome == 'CONSULTA_DE_ESTOQUE':
-                    buffers['seguranca'] = buffer
-                elif nome == 'Planilha Retaguarda':
-                    buffers['retaguarda'] = buffer
-                elif nome == 'SKUs Ignorados':
-                    buffers['ignorados'] = buffer
-            except Exception as e:
-                logger.error(f"Erro no download de {nome}: {str(e)}")
-                logger.error(traceback.format_exc())
+        # Download paralelo via SharePoint
+        buffers = {}
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            futures = {
+                executor.submit(download_planilha_sharepoint, url, nome): nome
+                for nome, url in [
+                    ('DRAFT_PDVS', urls_planilhas['draft_pdvs']),
+                    ('CONSULTA_DE_ESTOQUE', urls_planilhas['estoque_seguranca']),
+                    ('Planilha Retaguarda', urls_planilhas['retaguarda']),
+                    ('SKUs Ignorados', urls_planilhas['ignorados'])
+                ]
+            }
+            
+            for future in as_completed(futures):
+                nome = futures[future]
+                try:
+                    buffer = future.result()
+                    if nome == 'DRAFT_PDVS':
+                        buffers['draft'] = buffer
+                    elif nome == 'CONSULTA_DE_ESTOQUE':
+                        buffers['seguranca'] = buffer
+                    elif nome == 'Planilha Retaguarda':
+                        buffers['retaguarda'] = buffer
+                    elif nome == 'SKUs Ignorados':
+                        buffers['ignorados'] = buffer
+                except Exception as e:
+                    logger.error(f"Erro no download de {nome}: {str(e)}")
+                    logger.error(traceback.format_exc())
+    
+    else:
+        # Modo público ou privado (Google Sheets)
+        logger.info("📡 Usando fonte de dados: GOOGLE SHEETS")
+        urls_planilhas = {
+            'draft_pdvs': obter_url_exportacao('draft_pdvs'),
+            'estoque_seguranca': obter_url_exportacao('estoque_seguranca'),
+            'retaguarda': obter_url_exportacao('retaguarda'),
+            'ignorados': obter_url_exportacao('ignorados')
+        }
+        
+        # Download paralelo via Google Sheets
+        buffers = {}
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            futures = {
+                executor.submit(download_planilha_excel, url, nome): nome
+                for nome, url in [
+                    ('DRAFT_PDVS', urls_planilhas['draft_pdvs']),
+                    ('CONSULTA_DE_ESTOQUE', urls_planilhas['estoque_seguranca']),
+                    ('Planilha Retaguarda', urls_planilhas['retaguarda']),
+                    ('SKUs Ignorados', urls_planilhas['ignorados'])
+                ]
+            }
+            
+            for future in as_completed(futures):
+                nome = futures[future]
+                try:
+                    buffer = future.result()
+                    if nome == 'DRAFT_PDVS':
+                        buffers['draft'] = buffer
+                    elif nome == 'CONSULTA_DE_ESTOQUE':
+                        buffers['seguranca'] = buffer
+                    elif nome == 'Planilha Retaguarda':
+                        buffers['retaguarda'] = buffer
+                    elif nome == 'SKUs Ignorados':
+                        buffers['ignorados'] = buffer
+                except Exception as e:
+                    logger.error(f"Erro no download de {nome}: {str(e)}")
+                    logger.error(traceback.format_exc())
     
     logger.info("✅ Todos os downloads concluídos")
     
@@ -723,6 +829,7 @@ def carregar_todos_os_dados():
     logger.info(f"SKUs com custo > tabela: {stats['skus_custo_maior']}")
     logger.info(f"SKUs ignorados configurados: {stats['skus_ignorados']}")
     logger.info(f"SKUs ignorados filtrados: {stats['skus_ignorados_filtrados']}")
+    logger.info(f"Modo de acesso: {stats['modo_acesso']}")
     logger.info("=" * 60)
     
     st.session_state['progresso_atual'] = "Carregamento concluído!"
@@ -732,7 +839,7 @@ def carregar_todos_os_dados():
 
 def exibir_kpi_card(col, icone, titulo, valor_fmt, delta_texto=None, cor_delta="#ff4b4b", help_text=None):
     delta_html = f'<div style="font-size:12px;color:{cor_delta};margin-top:4px;">{delta_texto}</div>' if delta_texto else ''
-    help_icon = f'<span title="{help_text}" style="float:right;cursor:help;opacity:0.6;">ℹ️</span>' if help_text else ''
+    help_icon = f'<span title="{help_text}" style="float:right;cursor:help;opacity:0.6;">️</span>' if help_text else ''
     
     col.markdown(f"""
     <div style="
@@ -766,7 +873,7 @@ def exibir_titulo_marca(nome_marca, tamanho_logo=30):
                     st.markdown('<div class="logo-placeholder"></div>', unsafe_allow_html=True)
                     logger.warning(f"Logo não encontrada: {logo_path}")
             except Exception as e:
-                st.write("🏷️")
+                st.write("️")
                 logger.error(f"Erro ao carregar logo {logo_path}: {str(e)}")
         else:
             st.write("🏷️")
@@ -924,17 +1031,19 @@ def main():
     if not dados_marcas:
         st.error("❌ Nenhum dado foi carregado. Verifique os logs acima.")
         st.info("""
-        ### 🔧 Passos para resolver:
+        ###  Passos para resolver:
         
-        1. **Verifique se as planilhas estão públicas:**
-           - Abra cada planilha no Google Sheets
-           - Clique em "Compartilhar"
-           - Selecione "Qualquer pessoa com o link"
-           - Permissão: "Leitor"
+        1. **Verifique o MODO_ACESSO no config.py:**
+           - "publico" = Google Sheets público
+           - "sharepoint" = SharePoint público
         
-        2. **Verifique os IDs no config.py**
+        2. **Verifique se as planilhas estão acessíveis:**
+           - Google: "Qualquer pessoa com o link" → "Leitor"
+           - SharePoint: Link de compartilhamento público
         
-        3. **Verifique os nomes das abas:**
+        3. **Verifique os IDs/URLs no config.py**
+        
+        4. **Verifique os nomes das abas:**
            - DRAFT_PDVS: BOTICARIO, EUDORA, QUEM_DISSE_BERENICE
            - CONSULTA_DE_ESTOQUE: BOT, EUD, QDB
         """)
@@ -960,6 +1069,14 @@ def main():
             logger.error(f"Erro ao carregar logo principal: {str(e)}")
     
     with col_info:
+        # Badge do modo de acesso
+        if esta_no_modo_sharepoint():
+            modo_badge = '<span style="background:#0078d4;color:white;padding:2px 8px;border-radius:4px;font-size:10px;">SHAREPOINT</span>'
+        elif esta_no_modo_privado():
+            modo_badge = '<span style="background:#f59e0b;color:white;padding:2px 8px;border-radius:4px;font-size:10px;">GOOGLE PRIVADO</span>'
+        else:
+            modo_badge = '<span style="background:#007A33;color:white;padding:2px 8px;border-radius:4px;font-size:10px;">GOOGLE PÚBLICO</span>'
+        
         st.markdown(f"""
         <div style="
             background: linear-gradient(135deg, #0d1f14 0%, #080b0f 100%);
@@ -967,7 +1084,7 @@ def main():
             border-radius: 12px; padding: 20px 28px; margin-bottom: 8px;
         ">
             <div style="font-size:13px; color:#8da9be; margin-bottom:4px; letter-spacing:1px; text-transform:uppercase;">
-                Grupo NSF · CP Fani
+                Grupo NSF · CP Fani {modo_badge}
             </div>
             <div style="font-size:26px; font-weight:700; color:#D4AF37; line-height:1.2;">
                 📊 Painel de Controle de Estoques e Ruptura
@@ -983,7 +1100,7 @@ def main():
     # ==========================================================================
     # FEEDBACK VISUAL - DIAGNÓSTICO COMPLETO
     # ==========================================================================
-    with st.expander("🔍 Diagnóstico de Carregamento (clique para ver)", expanded=False):
+    with st.expander(" Diagnóstico de Carregamento (clique para ver)", expanded=False):
         col_d1, col_d2, col_d3, col_d4 = st.columns(4)
         col_d1.metric("SKUs na Retaguarda", f"{stats.get('total_skus_retaguarda', 0):,}",
                      help="Total de registros de custo encontrados na planilha Retaguarda")
@@ -1085,7 +1202,7 @@ def main():
             border:1px solid #007A33; border-radius:20px;
             padding:6px 20px; margin-bottom:12px;
         ">
-            <span style="color:#8da9be;font-size:13px;">🏪 PDV: </span>
+            <span style="color:#8da9be;font-size:13px;"> PDV: </span>
             <span style="color:#D4AF37;font-weight:700;font-size:15px;">{loja_selecionada_nome}</span>
         </div>
         """, unsafe_allow_html=True)
@@ -1148,8 +1265,8 @@ def main():
     # ==========================================================================
     # COBERTURA DE ESTOQUE POR CLASSE (Estoque Atual / DDV)
     # ==========================================================================
-    st.subheader("📦 Cobertura de Estoque por Classe (Estoque Atual / DDV)")
-    st.caption("DDV = Demanda Diária de Venda (soma histórico colunas I-Z / 365 dias). Cobertura = quantos dias o estoque atual dura.")
+    st.subheader(" Cobertura de Estoque por Classe (Estoque Atual / DDV)")
+    st.caption("DDV = Demanda Diária de Venda (detecção dinâmica por regex). Cobertura = quantos dias o estoque atual dura.")
     
     df_cobertura_classes = pd.DataFrame()
     
@@ -1237,7 +1354,7 @@ def main():
         )
         st.plotly_chart(fig_cobertura, use_container_width=True)
     else:
-        st.info("ℹ️ Nenhum dado de cobertura disponível para os filtros selecionados (verifique se há histórico de vendas nas colunas I-Z).")
+        st.info("ℹ️ Nenhum dado de cobertura disponível para os filtros selecionados (verifique se há histórico de vendas nas colunas detectadas).")
     
     st.markdown("---")
     
@@ -1245,7 +1362,7 @@ def main():
     # GRÁFICO COMPARATIVO POR MARCA
     # ==========================================================================
     if marca_selecionada == "Todas as Marcas":
-        st.subheader("📊 Comparativo entre Marcas")
+        st.subheader(" Comparativo entre Marcas")
 
         dados_grafico = []
         for nome_marca, df_completo in dados_marcas.items():
@@ -1453,6 +1570,7 @@ def main():
     <div class="footer-rodape">
         Dashboard de Estoque NSF · CP Fani | 
         Versão <span>{VERSAO}</span> ({DATA_VERSAO}) | 
+        Modo: <span>{MODO_ACESSO.upper()}</span> |
         Atualizado em <span>{horario_exibicao}</span>
     </div>
     <div style="height: 40px;"></div>
