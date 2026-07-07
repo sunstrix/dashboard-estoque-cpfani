@@ -1,28 +1,35 @@
 """
-Configuração centralizada das planilhas Google Sheets
+Configuração centralizada das planilhas Google Sheets e SharePoint
 Todos os IDs, URLs, mapeamentos e autenticação devem ser definidos aqui.
 
 ================================================================================
 MODO DE ACESSO ÀS PLANILHAS
 ================================================================================
 
-Este projeto suporta DOIS modos de acesso às planilhas:
+Este projeto suporta TRÊS modos de acesso às planilhas:
 
-1. MODO PÚBLICO (atual - padrão):
+1. MODO PÚBLICO (Google Sheets - padrão atual):
    - Usa URLs de exportação pública do Google Sheets
    - Não requer autenticação
    - Ideal para planilhas compartilhadas como "Qualquer pessoa com o link"
    - Mais rápido e simples
 
-2. MODO PRIVADO (preparado para o futuro):
+2. MODO PRIVADO (Google Sheets via gspread):
    - Usa a API oficial do Google Sheets via gspread
    - Requer arquivo de credenciais (service account JSON)
-   - Necessário quando as planilhas forem tornadas privadas
+   - Necessário quando as planilhas do Google forem tornadas privadas
    - Mais seguro e robusto
 
+3. MODO SHAREPOINT (Microsoft SharePoint - NOVO):
+   - Usa URLs de compartilhamento público do SharePoint
+   - Não requer autenticação Microsoft Graph API
+   - Resolve URLs de download via estratégias em cascata
+   - Implementado em sharepoint_utils.py
+
 Para alternar entre os modos, altere a constante MODO_ACESSO abaixo:
-    MODO_ACESSO = "publico"   # Usa URLs públicas (atual)
-    MODO_ACESSO = "privado"   # Usa gspread com autenticação (futuro)
+    MODO_ACESSO = "publico"      # Google Sheets público (atual)
+    MODO_ACESSO = "privado"      # Google Sheets via gspread
+    MODO_ACESSO = "sharepoint"   # SharePoint público (NOVO)
 
 Para usar o modo privado:
 1. Crie uma Conta de Serviço no Google Cloud Console
@@ -30,11 +37,17 @@ Para usar o modo privado:
 3. Coloque o arquivo na raiz do projeto (ou caminho configurado em CREDENTIALS_PATH)
 4. Compartilhe as planilhas com o e-mail da Conta de Serviço (como Leitor ou Editor)
 5. Altere MODO_ACESSO para "privado"
+
+Para usar o modo sharepoint:
+1. Configure as URLs das planilhas SharePoint em PLANILHAS_SHAREPOINT
+2. Altere MODO_ACESSO para "sharepoint"
+3. O sistema resolverá automaticamente as URLs de download
 ================================================================================
 """
 
 import os
 import logging
+import re
 
 # Imports opcionais para gspread (modo privado)
 # Se não instalados, o modo público continua funcionando normalmente
@@ -52,9 +65,10 @@ logger = logging.getLogger(__name__)
 # ==============================================================================
 # MODO DE ACESSO ÀS PLANILHAS
 # ==============================================================================
-# Valores possíveis: "publico" ou "privado"
-# - "publico": Usa URLs de exportação (atual, recomendado para planilhas públicas)
-# - "privado": Usa gspread com autenticação (para planilhas privadas)
+# Valores possíveis: "publico", "privado" ou "sharepoint"
+# - "publico": Usa URLs de exportação do Google Sheets (atual, recomendado)
+# - "privado": Usa gspread com autenticação (para planilhas privadas do Google)
+# - "sharepoint": Usa URLs de compartilhamento do SharePoint (NOVO)
 MODO_ACESSO = "publico"
 
 # ==============================================================================
@@ -74,7 +88,7 @@ CREDENTIALS_PATH = os.getenv(
 )
 
 # ==============================================================================
-# IDs DAS PLANILHAS GOOGLE SHEETS
+# IDs DAS PLANILHAS GOOGLE SHEETS (modo publico/privado)
 # ==============================================================================
 PLANILHAS = {
     "draft_pdvs": {
@@ -104,15 +118,47 @@ PLANILHAS = {
 }
 
 # ==============================================================================
+# URLs DAS PLANILHAS SHAREPOINT (modo sharepoint - NOVO)
+# ==============================================================================
+# URLs de compartilhamento público do SharePoint
+# Estas URLs serão resolvidas para URLs de download real via sharepoint_utils.py
+PLANILHAS_SHAREPOINT = {
+    "draft_pdvs": {
+        "url": "https://didiernsf.sharepoint.com/:x:/s/NSFcosmticosepresentesLTDA/IQCujrbIbWZLT50lUu7tb2V7Aew2WFZQK1Uo2c4T583mDnU?e=5RIBrD",
+        "nome": "DRAFT_PDVS",
+        "descricao": "Dados principais de PDVs, estoque e produtos (SharePoint)",
+        "abas_esperadas": ["BOTICARIO", "EUDORA", "QUEM_DISSE_BERENICE"]
+    },
+    "estoque_seguranca": {
+        "url": "https://didiernsf.sharepoint.com/:x:/s/NSFcosmticosepresentesLTDA/IQBrGlued5zuSbFM3MWSTXUrAZWfbWg18JffEkgyzhBgcYw?e=McCxBr",
+        "nome": "CONSULTA_DE_ESTOQUE",
+        "descricao": "Estoque de segurança e mínimos (SharePoint)",
+        "abas_esperadas": ["BOT", "EUD", "QDB"]
+    },
+    "retaguarda": {
+        "url": "https://didiernsf.sharepoint.com/:x:/s/NSFcosmticosepresentesLTDA/IQA-Wz0yzpnqSYa2YVVRybyWAUAs0EmwaQUPi4LDTGuAduU?e=E9TbRs",
+        "nome": "Planilha Retaguarda",
+        "descricao": "Custos dos produtos (SharePoint)",
+        "coluna_custo": "CUSTO"
+    },
+    "ignorados": {
+        "url": "https://didiernsf.sharepoint.com/:x:/s/NSFcosmticosepresentesLTDA/IQASGB3GLaJRS71jgs_72MP8AYI2PEbGup2KMRWfhdSIOfs?e=G3I27o",
+        "nome": "SKUs Ignorados",
+        "descricao": "SKUs que devem ser excluídos de todos os cálculos (SharePoint)",
+        "coluna_sku": "SKU"
+    }
+}
+
+# ==============================================================================
 # URLs CALCULADAS (evita reconstrução no app.py)
 # ==============================================================================
-# URL base para exportação em formato Excel (modo público)
+# URL base para exportação em formato Excel (modo público - Google Sheets)
 URL_EXPORT_BASE = "https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=xlsx"
 
 # URL base para edição no navegador (referência)
 URL_EDIT_BASE = "https://docs.google.com/spreadsheets/d/{sheet_id}/edit"
 
-# URLs de exportação pré-calculadas para cada planilha
+# URLs de exportação pré-calculadas para cada planilha (Google Sheets)
 URLS_EXPORTACAO = {
     chave: URL_EXPORT_BASE.format(sheet_id=config["id"])
     for chave, config in PLANILHAS.items()
@@ -198,32 +244,40 @@ COLUNAS_OBRIGATORIAS = {
 }
 
 # ==============================================================================
-# CONSTANTES DE CÁLCULO DE DDV (Demanda Diária de Venda)
+# CONSTANTES DE CÁLCULO DE DDV (Demanda Diária de Venda) - DETECÇÃO DINÂMICA
 # ==============================================================================
-# O DDV é calculado somando as colunas de histórico (I até Z) e dividindo por 365 dias
-# Colunas I até Z correspondem aos índices 8 até 25 (0-indexed)
-COLUNAS_HISTORICO_INICIO = 8   # Índice da coluna I (0-indexed)
-COLUNAS_HISTORICO_FIM = 26     # Índice após coluna Z (exclusive, 0-indexed)
-DIAS_ANO = 365                 # Dias no ano para cálculo do DDV
+# ATENÇÃO: A planilha DRAFT foi atualizada e agora tem nova estrutura com colunas
+# adicionais (Classe Segmentada, Projeção ciclo + 2, Foco Ciclo Atual, etc.)
+# O cálculo do DDV agora usa DETECÇÃO DINÂMICA por nome de cabeçalho (regex)
+# ao invés de índices fixos de coluna, tornando-o resiliente a mudanças futuras.
 
-# Fórmula do DDV:
-# DDV = Soma(colunas_I_ate_Z) / DIAS_ANO
-#
-# Fórmula da Cobertura de Estoque:
-# Cobertura = Estoque_Atual / DDV
-#
-# SKUs com DDV = 0 devem ser tratados como caso especial (evitar divisão por zero)
+# Padrão regex para identificar colunas de histórico de vendas
+# Formato: "Histórico de Vendas do Ciclo <6 dígitos>" (ex: 202608)
+# Exclui explicitamente "Histórico de Vendas do Ciclo Atual"
+REGEX_COLUNA_HISTORICO = r'^Histórico de Vendas do Ciclo \d{6}$'
 
-# Timeout para downloads (segundos)
+# Colunas que devem ser EXCLUÍDAS do cálculo do DDV anual
+# (mesmo que batam com o regex acima)
+COLUNAS_EXCLUIDAS_DDV = [
+    'Histórico de Vendas do Ciclo Atual'
+]
+
+# Dias no ano para cálculo do DDV
+DIAS_ANO = 365
+
+# Nova coluna adicionada na planilha (não usada em cálculos, mas preservada)
+COLUNA_CLASSE_SEGMENTADA = 'Classe Segmentada'
+
+# ==============================================================================
+# TIMEOUT E CACHE
+# ==============================================================================
 TIMEOUT_DOWNLOAD = 120
-
-# TTL do cache (segundos) - 1 hora
 CACHE_TTL = 3600
 
 # ==============================================================================
 # VERSÃO DO PROJETO
 # ==============================================================================
-VERSAO = "2.2.0"
+VERSAO = "2.3.0"
 DATA_VERSAO = "2026-06-18"
 
 # ==============================================================================
@@ -280,6 +334,25 @@ def obter_id_planilha(chave_planilha: str) -> str:
     return PLANILHAS[chave_planilha]["id"]
 
 
+def obter_url_sharepoint(chave_planilha: str) -> str:
+    """
+    Retorna a URL de compartilhamento do SharePoint para uma planilha.
+    
+    Args:
+        chave_planilha: Chave da planilha no dicionário PLANILHAS_SHAREPOINT
+    
+    Returns:
+        URL completa de compartilhamento do SharePoint
+    
+    Raises:
+        KeyError: Se a chave não existir em PLANILHAS_SHAREPOINT
+    """
+    if chave_planilha not in PLANILHAS_SHAREPOINT:
+        raise KeyError(f"Planilha SharePoint '{chave_planilha}' não encontrada. "
+                      f"Disponíveis: {list(PLANILHAS_SHAREPOINT.keys())}")
+    return PLANILHAS_SHAREPOINT[chave_planilha]["url"]
+
+
 def esta_no_modo_privado() -> bool:
     """
     Verifica se o sistema está configurado para usar o modo privado (gspread).
@@ -288,6 +361,26 @@ def esta_no_modo_privado() -> bool:
         True se MODO_ACESSO for "privado", False caso contrário
     """
     return MODO_ACESSO.lower().strip() == "privado"
+
+
+def esta_no_modo_sharepoint() -> bool:
+    """
+    Verifica se o sistema está configurado para usar o modo SharePoint.
+    
+    Returns:
+        True se MODO_ACESSO for "sharepoint", False caso contrário
+    """
+    return MODO_ACESSO.lower().strip() == "sharepoint"
+
+
+def esta_no_modo_publico() -> bool:
+    """
+    Verifica se o sistema está configurado para usar o modo público (Google Sheets).
+    
+    Returns:
+        True se MODO_ACESSO for "publico", False caso contrário
+    """
+    return MODO_ACESSO.lower().strip() == "publico"
 
 
 def verificar_disponibilidade_gspread() -> bool:
@@ -388,6 +481,47 @@ def obter_workbook_por_nome(nome_planilha: str):
         raise
 
 
+def detectar_colunas_historico(df_columns: list) -> list:
+    """
+    Detecta dinamicamente as colunas de histórico de vendas em um DataFrame.
+    
+    Usa regex para identificar colunas com padrão "Histórico de Vendas do Ciclo <6 dígitos>"
+    e exclui explicitamente colunas como "Histórico de Vendas do Ciclo Atual".
+    
+    Esta função torna o cálculo do DDV resiliente a mudanças na estrutura da planilha
+    (novas colunas inseridas, colunas removidas, etc.).
+    
+    Args:
+        df_columns: Lista de nomes das colunas do DataFrame
+    
+    Returns:
+        list: Lista de nomes de colunas que devem ser somadas para cálculo do DDV
+    
+    Exemplo:
+        >>> colunas = ['SKU', 'Histórico de Vendas do Ciclo 202608', 
+        ...            'Histórico de Vendas do Ciclo Atual', 
+        ...            'Histórico de Vendas do Ciclo 202607']
+        >>> detectar_colunas_historico(colunas)
+        ['Histórico de Vendas do Ciclo 202608', 'Histórico de Vendas do Ciclo 202607']
+    """
+    colunas_historico = []
+    pattern = re.compile(REGEX_COLUNA_HISTORICO)
+    
+    for col in df_columns:
+        # Verifica se bate com o regex
+        if pattern.match(col):
+            # Verifica se não está na lista de exclusões
+            if col not in COLUNAS_EXCLUIDAS_DDV:
+                colunas_historico.append(col)
+    
+    if colunas_historico:
+        logger.info(f"Detectadas {len(colunas_historico)} colunas de histórico para DDV: {colunas_historico}")
+    else:
+        logger.warning("Nenhuma coluna de histórico detectada para cálculo do DDV")
+    
+    return colunas_historico
+
+
 def diagnosticar_configuracao() -> dict:
     """
     Retorna um dicionário com o diagnóstico da configuração atual.
@@ -399,12 +533,17 @@ def diagnosticar_configuracao() -> dict:
     return {
         "modo_acesso": MODO_ACESSO,
         "usando_gspread": esta_no_modo_privado(),
+        "usando_sharepoint": esta_no_modo_sharepoint(),
+        "usando_google_publico": esta_no_modo_publico(),
         "gspread_disponivel": GSPREAD_AVAILABLE,
         "credentials_path": CREDENTIALS_PATH,
         "credentials_existe": os.path.exists(CREDENTIALS_PATH) if CREDENTIALS_PATH else False,
         "versao": VERSAO,
         "data_versao": DATA_VERSAO,
         "planilhas_configuradas": list(PLANILHAS.keys()),
+        "planilhas_sharepoint_configuradas": list(PLANILHAS_SHAREPOINT.keys()),
         "total_pdvs": len(DE_PARA_LOJAS),
         "total_marcas": len(NOMES_MARCAS),
+        "regex_historico": REGEX_COLUNA_HISTORICO,
+        "colunas_excluidas_ddv": COLUNAS_EXCLUIDAS_DDV,
     }
