@@ -30,7 +30,7 @@ from config import (
     COLUNAS_OBRIGATORIAS, TIMEOUT_DOWNLOAD, CACHE_TTL,
     obter_url_exportacao, VERSAO, DATA_VERSAO, diagnosticar_configuracao,
     esta_no_modo_privado, verificar_disponibilidade_gspread,
-    COLUNAS_HISTORICO_INICIO, COLUNAS_HISTORICO_FIM, DIAS_ANO,
+    DIAS_ANO,
     # Novas importações para SharePoint e detecção dinâmica
     MODO_ACESSO, PLANILHAS_SHAREPOINT, obter_url_sharepoint,
     esta_no_modo_sharepoint, esta_no_modo_publico,
@@ -55,7 +55,7 @@ logger = logging.getLogger(__name__)
 
 st.set_page_config(
     page_title="Painel de Performance de Estoque NSF - CP Fani",
-    page_icon="",
+    page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -236,7 +236,7 @@ def download_planilha_excel(url_planilha, nome_planilha):
         return BytesIO(content)
         
     except Exception as e:
-        logger.error(f" Erro ao baixar {nome_planilha}: {str(e)}")
+        logger.error(f"❌ Erro ao baixar {nome_planilha}: {str(e)}")
         logger.error(traceback.format_exc())
         st.error(f"Falha ao carregar {nome_planilha}: {str(e)[:200]}")
         return None
@@ -275,10 +275,6 @@ def download_planilha_sharepoint(url_compartilhamento, nome_planilha):
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def carregar_skus_ignorados(ignorados_buffer):
-    """
-    Carrega a planilha de SKUs ignorados e retorna um set com os SKUs normalizados.
-    Estes SKUs serão excluídos de TODOS os cálculos do dashboard.
-    """
     logger.info("Carregando planilha de SKUs Ignorados...")
     
     try:
@@ -300,7 +296,6 @@ def carregar_skus_ignorados(ignorados_buffer):
         
         df.columns = [str(col).strip().upper() for col in df.columns]
         
-        # Detecta coluna SKU
         colunas_sku = ['SKU', 'CÓDIGO', 'CODIGO', 'CÓDIGO SKU', 'CODIGO SKU', 
                        'EAN', 'COD PRODUTO', 'CÓDIGO PRODUTO', 'IGNORAR']
         coluna_sku = next((c for c in colunas_sku if c in df.columns), None)
@@ -309,9 +304,8 @@ def carregar_skus_ignorados(ignorados_buffer):
             logger.error(f"Ignorados: coluna SKU não encontrada. Colunas: {list(df.columns)}")
             return set()
         
-        # Normaliza SKUs e retorna como set
         skus_ignorados = set(df[coluna_sku].apply(normalizar_sku))
-        skus_ignorados.discard("")  # Remove strings vazias
+        skus_ignorados.discard("")
         
         logger.info(f"✅ SKUs Ignorados carregados: {len(skus_ignorados)} SKUs")
         return skus_ignorados
@@ -524,7 +518,7 @@ def carregar_dados_principais(draft_buffer):
                 df['Preço tabela'] = pd.to_numeric(df['Preço tabela'], errors='coerce').fillna(0)
                 df['SKU'] = df['SKU'].apply(normalizar_sku)
                 
-                # NOVA: Preserva coluna "Classe Segmentada" se existir
+                # Preserva coluna "Classe Segmentada" se existir
                 if COLUNA_CLASSE_SEGMENTADA in df.columns:
                     logger.info(f"✅ Coluna '{COLUNA_CLASSE_SEGMENTADA}' encontrada e preservada")
                 else:
@@ -542,15 +536,11 @@ def carregar_dados_principais(draft_buffer):
                     df['Estoque em Trânsito'] = 0
                     logger.warning(f"Aba {aba_excel}: coluna 'Estoque em Trânsito' não encontrada. Usando 0.")
                 
-                # ==================================================================
-                # NOVO: CÁLCULO DE DDV COM DETECÇÃO DINÂMICA POR REGEX
-                # ==================================================================
+                # CÁLCULO DE DDV COM DETECÇÃO DINÂMICA POR REGEX
                 try:
-                    # Detecta colunas de histórico dinamicamente
                     colunas_historico = detectar_colunas_historico(df.columns)
                     
                     if colunas_historico:
-                        # Converte todas as colunas para numérico e soma
                         df_hist = df[colunas_historico].apply(pd.to_numeric, errors='coerce').fillna(0)
                         df['Historico_Total'] = df_hist.sum(axis=1)
                         df['DDV'] = df['Historico_Total'] / DIAS_ANO
@@ -616,20 +606,17 @@ def carregar_todos_os_dados():
     logger.info("Fase 1: Download PARALELO das planilhas...")
     st.session_state['progresso_atual'] = "Baixando planilhas em paralelo..."
     
-    # Determina fonte de dados baseado no modo
     if esta_no_modo_sharepoint():
-        logger.info(" Usando fonte de dados: SHAREPOINT")
+        logger.info("📡 Usando fonte de dados: SHAREPOINT")
         if not SHAREPOINT_UTILS_AVAILABLE:
             st.error("❌ Modo SharePoint selecionado mas sharepoint_utils.py não está disponível")
             return {}, None, stats
         
-        # URLs SharePoint
         urls_planilhas = {
             chave: config['url'] 
             for chave, config in PLANILHAS_SHAREPOINT.items()
         }
         
-        # Download paralelo via SharePoint
         buffers = {}
         with ThreadPoolExecutor(max_workers=4) as executor:
             futures = {
@@ -659,7 +646,6 @@ def carregar_todos_os_dados():
                     logger.error(traceback.format_exc())
     
     else:
-        # Modo público ou privado (Google Sheets)
         logger.info("📡 Usando fonte de dados: GOOGLE SHEETS")
         urls_planilhas = {
             'draft_pdvs': obter_url_exportacao('draft_pdvs'),
@@ -668,7 +654,6 @@ def carregar_todos_os_dados():
             'ignorados': obter_url_exportacao('ignorados')
         }
         
-        # Download paralelo via Google Sheets
         buffers = {}
         with ThreadPoolExecutor(max_workers=4) as executor:
             futures = {
@@ -731,19 +716,16 @@ def carregar_todos_os_dados():
     if skus_ignorados:
         logger.info(f"Fase 4: Filtrando {len(skus_ignorados)} SKUs ignorados...")
         
-        # Filtrar na retaguarda
         if not df_retaguarda.empty:
             antes = len(df_retaguarda)
             df_retaguarda = df_retaguarda[~df_retaguarda['SKU'].isin(skus_ignorados)]
             logger.info(f"Retaguarda: {antes - len(df_retaguarda)} registros removidos (ignorados)")
         
-        # Filtrar no estoque de segurança
         if not df_estoque_seguranca.empty:
             antes = len(df_estoque_seguranca)
             df_estoque_seguranca = df_estoque_seguranca[~df_estoque_seguranca['SKU'].isin(skus_ignorados)]
             logger.info(f"Segurança: {antes - len(df_estoque_seguranca)} registros removidos (ignorados)")
         
-        # Filtrar em cada planilha de marca
         total_filtrados = 0
         for nome_marca in dados_marcas.keys():
             antes = len(dados_marcas[nome_marca])
@@ -839,7 +821,7 @@ def carregar_todos_os_dados():
 
 def exibir_kpi_card(col, icone, titulo, valor_fmt, delta_texto=None, cor_delta="#ff4b4b", help_text=None):
     delta_html = f'<div style="font-size:12px;color:{cor_delta};margin-top:4px;">{delta_texto}</div>' if delta_texto else ''
-    help_icon = f'<span title="{help_text}" style="float:right;cursor:help;opacity:0.6;">️</span>' if help_text else ''
+    help_icon = f'<span title="{help_text}" style="float:right;cursor:help;opacity:0.6;">ℹ️</span>' if help_text else ''
     
     col.markdown(f"""
     <div style="
@@ -876,7 +858,7 @@ def exibir_titulo_marca(nome_marca, tamanho_logo=30):
                 st.write("️")
                 logger.error(f"Erro ao carregar logo {logo_path}: {str(e)}")
         else:
-            st.write("🏷️")
+            st.write("️")
     with col_nome:
         st.markdown(f"""
         <div style="
@@ -959,7 +941,6 @@ def gerar_pdf_dashboard(dados_filtrados, pdv_selecionado, loja_selecionada_nome,
     elementos.append(tabela_kpi)
     elementos.append(Spacer(1, 0.5*cm))
 
-    # APENAS tabela de FALTAS (Excessos removidos)
     for nome_marca, df_completo in dados_filtrados.items():
         if pdv_selecionado == 'TODAS':
             df_loja = df_completo
@@ -1031,7 +1012,7 @@ def main():
     if not dados_marcas:
         st.error("❌ Nenhum dado foi carregado. Verifique os logs acima.")
         st.info("""
-        ###  Passos para resolver:
+        ### 🔧 Passos para resolver:
         
         1. **Verifique o MODO_ACESSO no config.py:**
            - "publico" = Google Sheets público
@@ -1069,7 +1050,6 @@ def main():
             logger.error(f"Erro ao carregar logo principal: {str(e)}")
     
     with col_info:
-        # Badge do modo de acesso
         if esta_no_modo_sharepoint():
             modo_badge = '<span style="background:#0078d4;color:white;padding:2px 8px;border-radius:4px;font-size:10px;">SHAREPOINT</span>'
         elif esta_no_modo_privado():
@@ -1097,10 +1077,7 @@ def main():
     
     st.markdown("---")
     
-    # ==========================================================================
-    # FEEDBACK VISUAL - DIAGNÓSTICO COMPLETO
-    # ==========================================================================
-    with st.expander(" Diagnóstico de Carregamento (clique para ver)", expanded=False):
+    with st.expander("🔍 Diagnóstico de Carregamento (clique para ver)", expanded=False):
         col_d1, col_d2, col_d3, col_d4 = st.columns(4)
         col_d1.metric("SKUs na Retaguarda", f"{stats.get('total_skus_retaguarda', 0):,}",
                      help="Total de registros de custo encontrados na planilha Retaguarda")
@@ -1190,7 +1167,7 @@ def main():
             border:1px solid #007A33; border-radius:20px;
             padding:6px 20px; margin-bottom:12px;
         ">
-            <span style="color:#8da9be;font-size:13px;">🏪 PDV: </span>
+            <span style="color:#8da9be;font-size:13px;"> PDV: </span>
             <span style="color:#D4AF37;font-weight:700;font-size:15px;">Todas as Lojas ({len(todos_pdvs)})</span>
         </div>
         """, unsafe_allow_html=True)
@@ -1202,7 +1179,7 @@ def main():
             border:1px solid #007A33; border-radius:20px;
             padding:6px 20px; margin-bottom:12px;
         ">
-            <span style="color:#8da9be;font-size:13px;"> PDV: </span>
+            <span style="color:#8da9be;font-size:13px;">🏪 PDV: </span>
             <span style="color:#D4AF37;font-weight:700;font-size:15px;">{loja_selecionada_nome}</span>
         </div>
         """, unsafe_allow_html=True)
@@ -1249,23 +1226,20 @@ def main():
     
     pct_excesso = f"{((v_excesso_total_total/v_estoque_atual_total)*100 if v_estoque_atual_total > 0 else 0):.1f}%"
     exibir_kpi_card(
-        col3, "⚠️", "Capital Preso", f"R$ {v_excesso_total_total:,.2f}", 
+        col3, "️", "Capital Preso", f"R$ {v_excesso_total_total:,.2f}", 
         delta_texto=f"{pct_excesso} do estoque", cor_delta="#f59e0b",
         help_text="Valor do estoque acima do mínimo (Estoque Atual - Estoque Mínimo) × Preço Tabela"
     )
     
     exibir_kpi_card(
-        col4, "🚨", "Risco de Ruptura", f"R$ {v_falta_total_total:,.2f}", 
+        col4, "", "Risco de Ruptura", f"R$ {v_falta_total_total:,.2f}", 
         delta_texto="Abaixo do Mínimo", cor_delta="#ef4444",
         help_text="Valor necessário para atingir o estoque mínimo (Estoque Mínimo - Estoque Atual) × Preço Tabela"
     )
     
     st.markdown("---")
     
-    # ==========================================================================
-    # COBERTURA DE ESTOQUE POR CLASSE (Estoque Atual / DDV)
-    # ==========================================================================
-    st.subheader(" Cobertura de Estoque por Classe (Estoque Atual / DDV)")
+    st.subheader("📦 Cobertura de Estoque por Classe (Estoque Atual / DDV)")
     st.caption("DDV = Demanda Diária de Venda (detecção dinâmica por regex). Cobertura = quantos dias o estoque atual dura.")
     
     df_cobertura_classes = pd.DataFrame()
@@ -1277,14 +1251,13 @@ def main():
             df_loja = df_completo[df_completo['PDV'] == pdv_selecionado]
         
         if not df_loja.empty and 'Classe' in df_loja.columns and 'DDV' in df_loja.columns:
-            # Filtra apenas SKUs com DDV > 0 (para não distorcer a média)
             df_valido = df_loja[df_loja['DDV'] > 0].copy()
             
             if not df_valido.empty:
                 df_classe = df_valido.groupby('Classe').agg({
-                    'Cobertura_Estoque': 'mean',  # Média da cobertura em dias
-                    'DDV': 'mean',  # Média do DDV
-                    'Estoque Atual': 'sum',  # Soma do estoque
+                    'Cobertura_Estoque': 'mean',
+                    'DDV': 'mean',
+                    'Estoque Atual': 'sum',
                     'SKU': 'count'
                 }).reset_index()
                 df_classe.columns = ['Classe', 'Cobertura (dias)', 'DDV Médio', 'Estoque Total', 'Qtd SKUs']
@@ -1305,7 +1278,6 @@ def main():
             colunas_marcas_cob = [col for col in df_pivot_cob.columns if col != 'Classe']
             df_pivot_cob['Média Geral'] = df_pivot_cob[colunas_marcas_cob].mean(axis=1)
             
-            # Formata com 1 casa decimal
             for col in colunas_marcas_cob + ['Média Geral']:
                 df_pivot_cob[col] = df_pivot_cob[col].apply(lambda x: f"{x:,.1f}")
             
@@ -1320,7 +1292,6 @@ def main():
             
             st.dataframe(df_exibicao_cob, use_container_width=True, hide_index=True)
         
-        # Gráfico de Cobertura de Estoque
         fig_cobertura = go.Figure()
         
         if marca_selecionada == "Todas as Marcas":
@@ -1358,11 +1329,8 @@ def main():
     
     st.markdown("---")
     
-    # ==========================================================================
-    # GRÁFICO COMPARATIVO POR MARCA
-    # ==========================================================================
     if marca_selecionada == "Todas as Marcas":
-        st.subheader(" Comparativo entre Marcas")
+        st.subheader("📊 Comparativo entre Marcas")
 
         dados_grafico = []
         for nome_marca, df_completo in dados_marcas.items():
@@ -1406,9 +1374,6 @@ def main():
                                         height=400, title='Custo Total por Marca', yaxis_title='Valor (R$)')
                 st.plotly_chart(fig_custo, use_container_width=True)
 
-    # ==========================================================================
-    # CUSTO POR CURVA
-    # ==========================================================================
     st.markdown("---")
     st.subheader("📊 Custo Total por Curva de Produto")
 
@@ -1463,11 +1428,8 @@ def main():
                                 height=400, xaxis_title='Curva', yaxis_title='Custo Total (R$)', title='Distribuição de Custo por Curva')
         st.plotly_chart(fig_custo, use_container_width=True)
 
-    # ==========================================================================
-    # ANÁLISE POR CATEGORIA
-    # ==========================================================================
     st.markdown("---")
-    st.subheader("📊 Análise por Categoria")
+    st.subheader(" Análise por Categoria")
 
     df_categoria_consolidado = pd.DataFrame()
     for nome_marca, df_completo in dados_filtrados.items():
@@ -1500,11 +1462,8 @@ def main():
                               height=400, xaxis_title='Categoria', yaxis_title='Valor (R$)', title='Estoque por Categoria')
         st.plotly_chart(fig_cat, use_container_width=True)
 
-    # ==========================================================================
-    # TABELA APENAS DE PRODUTOS EM FALTA (EXCESSOS REMOVIDOS)
-    # ==========================================================================
     st.markdown("---")
-    st.subheader("🚨 Produtos Críticos em Falta / Ruptura")
+    st.subheader(" Produtos Críticos em Falta / Ruptura")
 
     for nome_marca, df_completo in dados_filtrados.items():
         if pdv_selecionado == 'TODAS':
@@ -1537,9 +1496,6 @@ def main():
         
         st.markdown("---")
 
-    # ==========================================================================
-    # EXPORTAR PDF
-    # ==========================================================================
     pdf_buffer = gerar_pdf_dashboard(
         dados_filtrados=dados_filtrados,
         pdv_selecionado=pdv_selecionado,
@@ -1563,9 +1519,6 @@ def main():
             help="Gera um relatório PDF com os KPIs e tabela de faltas (SKUs ignorados excluídos)"
         )
     
-    # ==========================================================================
-    # RODAPÉ FIXO COM VERSÃO
-    # ==========================================================================
     st.markdown(f"""
     <div class="footer-rodape">
         Dashboard de Estoque NSF · CP Fani | 
