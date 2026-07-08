@@ -69,7 +69,7 @@ logger = logging.getLogger(__name__)
 # - "publico": Usa URLs de exportação do Google Sheets (atual, recomendado)
 # - "privado": Usa gspread com autenticação (para planilhas privadas do Google)
 # - "sharepoint": Usa URLs de compartilhamento do SharePoint (NOVO)
-MODO_ACESSO = "publico"
+MODO_ACESSO = "sharepoint"
 
 # ==============================================================================
 # CONFIGURAÇÕES DE AUTENTICAÇÃO (gspread - modo privado)
