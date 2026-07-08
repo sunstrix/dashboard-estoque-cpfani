@@ -31,13 +31,11 @@ from config import (
     obter_url_exportacao, VERSAO, DATA_VERSAO, diagnosticar_configuracao,
     esta_no_modo_privado, verificar_disponibilidade_gspread,
     DIAS_ANO,
-    # Novas importações para SharePoint e detecção dinâmica
     MODO_ACESSO, PLANILHAS_SHAREPOINT, obter_url_sharepoint,
     esta_no_modo_sharepoint, esta_no_modo_publico,
     detectar_colunas_historico, COLUNA_CLASSE_SEGMENTADA
 )
 
-# Importa módulo de utilitários do SharePoint
 try:
     from sharepoint_utils import baixar_arquivo_sharepoint, resolver_url_download_sharepoint
     SHAREPOINT_UTILS_AVAILABLE = True
@@ -141,7 +139,6 @@ details summary {
 ::-webkit-scrollbar-thumb { background: #007A33; border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: #D4AF37; }
 
-/* Rodapé fixo */
 .footer-rodape {
     position: fixed;
     bottom: 0;
@@ -160,7 +157,6 @@ details summary {
     font-weight: 600;
 }
 
-/* Placeholder para logos */
 .logo-placeholder {
     width: 40px;
     height: 40px;
@@ -244,12 +240,8 @@ def download_planilha_excel(url_planilha, nome_planilha):
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def download_planilha_sharepoint(url_compartilhamento, nome_planilha):
-    """
-    Download de planilha via SharePoint usando resolução automática de URL.
-    Mantém a mesma interface que download_planilha_excel para compatibilidade.
-    """
     if not SHAREPOINT_UTILS_AVAILABLE:
-        logger.error("❌ sharepoint_utils.py não disponível")
+        logger.error(" sharepoint_utils.py não disponível")
         st.error("Módulo SharePoint não encontrado. Verifique sharepoint_utils.py")
         return None
     
@@ -474,8 +466,7 @@ def carregar_estoque_seguranca(seguranca_buffer):
 def carregar_dados_principais(draft_buffer):
     """
     Carrega planilha principal DRAFT_PDVS com DETECÇÃO DINÂMICA de colunas de histórico.
-    Usa regex para identificar colunas "Histórico de Vendas do Ciclo <6 dígitos>"
-    e calcula DDV automaticamente, tornando o código resiliente a mudanças na estrutura.
+    CORREÇÃO: Adicionado diagnóstico detalhado para DataFrames vazios.
     """
     logger.info("Carregando planilha principal DRAFT_PDVS...")
     
@@ -504,7 +495,31 @@ def carregar_dados_principais(draft_buffer):
             logger.info(f"Processando aba: {aba_excel} → {nome_exibicao}")
             
             try:
-                df = pd.read_excel(excel_file, sheet_name=aba_excel)
+                # Tenta diferentes configurações de header para lidar com estruturas variadas
+                df = None
+                for header_row in [0, 1, 2]:
+                    try:
+                        df_temp = pd.read_excel(excel_file, sheet_name=aba_excel, header=header_row)
+                        if not df_temp.empty and len(df_temp.columns) > 5:
+                            df = df_temp
+                            logger.info(f"✅ Usando header={header_row} para aba {aba_excel}")
+                            break
+                    except Exception as e_header:
+                        logger.warning(f"Tentativa header={header_row} falhou: {str(e_header)}")
+                        continue
+                
+                if df is None or df.empty:
+                    logger.error(f"❌ Aba {aba_excel}: não foi possível carregar dados (DataFrame vazio)")
+                    logger.error(f"Colunas encontradas: {list(df.columns) if df is not None else 'None'}")
+                    logger.error(f"Shape: {df.shape if df is not None else 'None'}")
+                    continue
+                
+                # DIAGNÓSTICO: Log detalhado do DataFrame carregado
+                logger.info(f"📊 DataFrame carregado - Shape: {df.shape}")
+                logger.info(f"📊 Colunas: {list(df.columns)[:10]}...")  # Primeiras 10 colunas
+                logger.info(f" Primeiras 3 linhas:")
+                for i in range(min(3, len(df))):
+                    logger.info(f"   Linha {i}: {df.iloc[i].to_dict()}")
                 
                 colunas_faltantes = [col for col in COLUNAS_OBRIGATORIAS["draft_pdvs"] if col not in df.columns]
                 if colunas_faltantes:
@@ -517,6 +532,13 @@ def carregar_dados_principais(draft_buffer):
                 df['Estoque Atual'] = pd.to_numeric(df['Estoque Atual'], errors='coerce').fillna(0)
                 df['Preço tabela'] = pd.to_numeric(df['Preço tabela'], errors='coerce').fillna(0)
                 df['SKU'] = df['SKU'].apply(normalizar_sku)
+                
+                # Remove linhas com PDV ou SKU inválidos
+                antes_limpeza = len(df)
+                df = df[df['PDV'].notna() & (df['SKU'] != '')]
+                depois_limpeza = len(df)
+                if antes_limpeza != depois_limpeza:
+                    logger.info(f"🧹 Removidas {antes_limpeza - depois_limpeza} linhas com PDV/SKU inválidos")
                 
                 # Preserva coluna "Classe Segmentada" se existir
                 if COLUNA_CLASSE_SEGMENTADA in df.columns:
@@ -579,12 +601,6 @@ def carregar_dados_principais(draft_buffer):
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def carregar_todos_os_dados():
-    """
-    Carrega todas as planilhas com downloads PARALELIZADOS.
-    Suporta tanto Google Sheets quanto SharePoint baseado no MODO_ACESSO.
-    Aplica filtro de SKUs ignorados em todos os dados.
-    Calcula DDV e Cobertura de Estoque para cada SKU.
-    """
     logger.info("=" * 60)
     logger.info("INICIANDO CARREGAMENTO DE DADOS")
     logger.info(f"MODO_ACESSO: {MODO_ACESSO}")
@@ -600,16 +616,13 @@ def carregar_todos_os_dados():
         'modo_acesso': MODO_ACESSO
     }
     
-    # ==========================================================================
-    # FASE 1: DOWNLOAD PARALELO DAS 4 PLANILHAS
-    # ==========================================================================
     logger.info("Fase 1: Download PARALELO das planilhas...")
     st.session_state['progresso_atual'] = "Baixando planilhas em paralelo..."
     
     if esta_no_modo_sharepoint():
         logger.info("📡 Usando fonte de dados: SHAREPOINT")
         if not SHAREPOINT_UTILS_AVAILABLE:
-            st.error("❌ Modo SharePoint selecionado mas sharepoint_utils.py não está disponível")
+            st.error(" Modo SharePoint selecionado mas sharepoint_utils.py não está disponível")
             return {}, None, stats
         
         urls_planilhas = {
@@ -646,7 +659,7 @@ def carregar_todos_os_dados():
                     logger.error(traceback.format_exc())
     
     else:
-        logger.info("📡 Usando fonte de dados: GOOGLE SHEETS")
+        logger.info(" Usando fonte de dados: GOOGLE SHEETS")
         urls_planilhas = {
             'draft_pdvs': obter_url_exportacao('draft_pdvs'),
             'estoque_seguranca': obter_url_exportacao('estoque_seguranca'),
@@ -684,17 +697,11 @@ def carregar_todos_os_dados():
     
     logger.info("✅ Todos os downloads concluídos")
     
-    # ==========================================================================
-    # FASE 2: CARREGAR SKUs IGNORADOS
-    # ==========================================================================
     logger.info("Fase 2: Carregando SKUs ignorados...")
     st.session_state['progresso_atual'] = "Carregando SKUs ignorados..."
     skus_ignorados = carregar_skus_ignorados(buffers.get('ignorados'))
     stats['skus_ignorados'] = len(skus_ignorados)
     
-    # ==========================================================================
-    # FASE 3: PROCESSAMENTO DOS DADOS
-    # ==========================================================================
     logger.info("Fase 3: Processamento dos dados...")
     st.session_state['progresso_atual'] = "Processando planilha principal..."
     
@@ -710,9 +717,6 @@ def carregar_todos_os_dados():
     df_retaguarda = carregar_planilha_retaguarda(buffers.get('retaguarda'))
     stats['total_skus_retaguarda'] = len(df_retaguarda) if not df_retaguarda.empty else 0
     
-    # ==========================================================================
-    # FASE 4: FILTRAR SKUs IGNORADOS DE TODAS AS PLANILHAS
-    # ==========================================================================
     if skus_ignorados:
         logger.info(f"Fase 4: Filtrando {len(skus_ignorados)} SKUs ignorados...")
         
@@ -737,9 +741,6 @@ def carregar_todos_os_dados():
         
         stats['skus_ignorados_filtrados'] = total_filtrados
     
-    # ==========================================================================
-    # FASE 5: APLICANDO CUSTOS DA RETAGUARDA (OTIMIZADO)
-    # ==========================================================================
     logger.info("Fase 5: Aplicando custos da Retaguarda...")
     st.session_state['progresso_atual'] = "Aplicando custos e calculando métricas..."
     
@@ -1101,7 +1102,7 @@ def main():
             st.warning("⚠️ **Planilha de SKUs Ignorados não carregada.** Todos os SKUs serão incluídos nos cálculos.")
     
     if stats.get('total_skus_retaguarda', 0) == 0:
-        st.warning("⚠️ **Planilha Retaguarda não carregada.** Usando Preço de Tabela como custo para todos os SKUs.")
+        st.warning("️ **Planilha Retaguarda não carregada.** Usando Preço de Tabela como custo para todos os SKUs.")
     
     st.markdown("---")
     
@@ -1167,7 +1168,7 @@ def main():
             border:1px solid #007A33; border-radius:20px;
             padding:6px 20px; margin-bottom:12px;
         ">
-            <span style="color:#8da9be;font-size:13px;"> PDV: </span>
+            <span style="color:#8da9be;font-size:13px;">🏪 PDV: </span>
             <span style="color:#D4AF37;font-weight:700;font-size:15px;">Todas as Lojas ({len(todos_pdvs)})</span>
         </div>
         """, unsafe_allow_html=True)
@@ -1239,7 +1240,7 @@ def main():
     
     st.markdown("---")
     
-    st.subheader("📦 Cobertura de Estoque por Classe (Estoque Atual / DDV)")
+    st.subheader(" Cobertura de Estoque por Classe (Estoque Atual / DDV)")
     st.caption("DDV = Demanda Diária de Venda (detecção dinâmica por regex). Cobertura = quantos dias o estoque atual dura.")
     
     df_cobertura_classes = pd.DataFrame()
@@ -1375,7 +1376,7 @@ def main():
                 st.plotly_chart(fig_custo, use_container_width=True)
 
     st.markdown("---")
-    st.subheader("📊 Custo Total por Curva de Produto")
+    st.subheader(" Custo Total por Curva de Produto")
 
     df_curva_consolidado = pd.DataFrame()
     for nome_marca, df_completo in dados_filtrados.items():
@@ -1429,7 +1430,7 @@ def main():
         st.plotly_chart(fig_custo, use_container_width=True)
 
     st.markdown("---")
-    st.subheader(" Análise por Categoria")
+    st.subheader("📊 Análise por Categoria")
 
     df_categoria_consolidado = pd.DataFrame()
     for nome_marca, df_completo in dados_filtrados.items():
@@ -1463,7 +1464,7 @@ def main():
         st.plotly_chart(fig_cat, use_container_width=True)
 
     st.markdown("---")
-    st.subheader(" Produtos Críticos em Falta / Ruptura")
+    st.subheader("🚨 Produtos Críticos em Falta / Ruptura")
 
     for nome_marca, df_completo in dados_filtrados.items():
         if pdv_selecionado == 'TODAS':
@@ -1511,7 +1512,7 @@ def main():
 
     if pdf_buffer is not None:
         st.download_button(
-            label="📥 Exportar Relatório em PDF",
+            label=" Exportar Relatório em PDF",
             data=pdf_buffer,
             file_name=f"relatorio_estoque_{pdv_selecionado if pdv_selecionado != 'TODAS' else 'TODAS_LOJAS'}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
             mime="application/pdf",
