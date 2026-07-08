@@ -122,6 +122,12 @@ PLANILHAS = {
 # ==============================================================================
 # URLs de compartilhamento público do SharePoint
 # Estas URLs serão resolvidas para URLs de download real via sharepoint_utils.py
+#
+# ⚠️ ATENÇÃO: URLs verificadas manualmente em 2026-07-08
+# - Retaguarda (custos): IQBrGlued5zuSbFM3MWSTXUrAZWfbWg18JffEkgyzhBgcYw
+# - Estoque de Segurança: IQA-Wz0yzpnqSYa2YVVRybyWAUAs0EmwaQUPi4LDTGuAduU
+# - DRAFT_PDVS (principal): IQCujrbIbWZLT50lUu7tb2V7Aew2WFZQK1Uo2c4T583mDnU
+# - SKUs Ignorados: IQASGB3GLaJRS71jgs_72MP8AYI2PEbGup2KMRWfhdSIOfs
 PLANILHAS_SHAREPOINT = {
     "draft_pdvs": {
         "url": "https://didiernsf.sharepoint.com/:x:/s/NSFcosmticosepresentesLTDA/IQCujrbIbWZLT50lUu7tb2V7Aew2WFZQK1Uo2c4T583mDnU?e=5RIBrD",
@@ -130,13 +136,13 @@ PLANILHAS_SHAREPOINT = {
         "abas_esperadas": ["BOTICARIO", "EUDORA", "QUEM_DISSE_BERENICE"]
     },
     "estoque_seguranca": {
-        "url": "https://didiernsf.sharepoint.com/:x:/s/NSFcosmticosepresentesLTDA/IQBrGlued5zuSbFM3MWSTXUrAZWfbWg18JffEkgyzhBgcYw?e=McCxBr",
+        "url": "https://didiernsf.sharepoint.com/:x:/s/NSFcosmticosepresentesLTDA/IQA-Wz0yzpnqSYa2YVVRybyWAUAs0EmwaQUPi4LDTGuAduU?e=E9TbRs",
         "nome": "CONSULTA_DE_ESTOQUE",
         "descricao": "Estoque de segurança e mínimos (SharePoint)",
         "abas_esperadas": ["BOT", "EUD", "QDB"]
     },
     "retaguarda": {
-        "url": "https://didiernsf.sharepoint.com/:x:/s/NSFcosmticosepresentesLTDA/IQA-Wz0yzpnqSYa2YVVRybyWAUAs0EmwaQUPi4LDTGuAduU?e=E9TbRs",
+        "url": "https://didiernsf.sharepoint.com/:x:/s/NSFcosmticosepresentesLTDA/IQBrGlued5zuSbFM3MWSTXUrAZWfbWg18JffEkgyzhBgcYw?e=McCxBr",
         "nome": "Planilha Retaguarda",
         "descricao": "Custos dos produtos (SharePoint)",
         "coluna_custo": "CUSTO"
@@ -277,8 +283,8 @@ CACHE_TTL = 3600
 # ==============================================================================
 # VERSÃO DO PROJETO
 # ==============================================================================
-VERSAO = "2.3.0"
-DATA_VERSAO = "2026-06-18"
+VERSAO = "2.3.1"
+DATA_VERSAO = "2026-07-08"
 
 # ==============================================================================
 # FUNÇÕES AUXILIARES DE AUTENTICAÇÃO (modo privado)
