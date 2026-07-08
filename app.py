@@ -25,7 +25,7 @@ except ImportError:
     REPORTLAB_AVAILABLE = False
 
 from config import (
-    PLANILHAS, DE_PARA_LOJAS, DE_PARA_LOJAS_REVERSO, 
+    PLANILHAS, DE_PARA_LOJAS, DE_PARA_LOJAS_REVERSO,
     MAPEAMENTO_PDV_DRAFT_RAW, NOMES_MARCAS, ABAS_SEGURANCA,
     LOGOS_MARCAS, CORES_MARCAS, REGRAS_ESTOQUE_MINIMO,
     COLUNAS_OBRIGATORIAS, TIMEOUT_DOWNLOAD, CACHE_TTL,
@@ -42,8 +42,6 @@ try:
     SHAREPOINT_UTILS_AVAILABLE = True
 except ImportError:
     SHAREPOINT_UTILS_AVAILABLE = False
-    logger = logging.getLogger(__name__)
-    logger.warning("⚠️ sharepoint_utils.py não encontrado. Modo SharePoint indisponível.")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -173,23 +171,16 @@ details summary {
 </style>
 """, unsafe_allow_html=True)
 
+
 # ==============================================================================
 # FUNÇÕES AUXILIARES DE NORMALIZAÇÃO
 # ==============================================================================
 
 def normalizar_texto(texto):
-    """
-    Normaliza texto removendo acentos e convertendo para uppercase.
-    Usado para matching robusto de nomes de colunas.
-    
-    Exemplo:
-        >>> normalizar_texto("Preço Unitário")
-        'PRECO UNITARIO'
-    """
+    """Normaliza texto removendo acentos e convertendo para uppercase."""
     if pd.isna(texto) or texto is None:
         return ""
     texto = str(texto).strip()
-    # Remove acentos usando Unicode normalization
     texto = unicodedata.normalize('NFKD', texto).encode('ASCII', 'ignore').decode('ASCII')
     return texto.upper()
 
@@ -212,26 +203,13 @@ def normalizar_sku(valor):
 
 
 def normalizar_pdv(valor):
-    """
-    BUG 1 FIX: Normaliza PDV para aceitar formatos variados.
-    
-    Aceita: 4842, 4842.0, "4842", " 4842 ", 4842,0, "4842.0"
-    Retorna: string limpa do PDV ou None se inválido
-    """
+    """BUG 1 FIX: Normaliza PDV para aceitar formatos variados."""
     if pd.isna(valor) or valor is None:
         return None
-    
-    # Converte para string e limpa
     s = str(valor).strip()
-    
-    # Remove .0 final (ex: "4842.0" → "4842")
     if s.endswith('.0'):
         s = s[:-2]
-    
-    # Remove vírgula e substitui por ponto (ex: "4842,0" → "4842.0")
     s = s.replace(',', '.')
-    
-    # Tenta converter para número
     try:
         num = float(s)
         if num == int(num):
@@ -240,11 +218,8 @@ def normalizar_pdv(valor):
             return str(num)
     except (ValueError, TypeError):
         pass
-    
-    # Se não conseguiu converter, retorna a string limpa se não estiver vazia
     if s and s != 'nan' and s != 'None':
         return s
-    
     return None
 
 
@@ -268,84 +243,49 @@ MAPEAMENTO_PDV_DRAFT_NORMALIZADO = {
 # ==============================================================================
 
 def detectar_coluna_custo(colunas):
-    """
-    BUG 1 FIX: Detecta coluna de custo por NOME (não por posição).
-    
-    Busca por variações normalizadas:
-    - CUSTO
-    - PRECO CUSTO / PREÇO CUSTO
-    - CUSTO UNITARIO / CUSTO UNITÁRIO
-    - VALOR CUSTO
-    - CUSTO (R$)
-    - CUSTO R$
-    
-    Args:
-        colunas: Lista de nomes das colunas do DataFrame
-    
-    Returns:
-        str: Nome da coluna de custo encontrada ou None se não encontrar
-    """
-    # Variações possíveis do nome da coluna de custo (normalizadas)
+    """BUG 1 FIX: Detecta coluna de custo por NOME (não por posição)."""
     variacoes_custo = [
-        'CUSTO',
-        'PRECO CUSTO',
-        'PRECO DE CUSTO',
-        'CUSTO UNITARIO',
-        'CUSTO UNIT',
-        'VALOR CUSTO',
-        'CUSTO R$',
-        'CUSTO (R$)',
-        'VL CUSTO',
-        'VALOR DE CUSTO',
-        'PRECO MEDIO CUSTO',
-        'CUSTO MEDIO',
+        'CUSTO', 'PRECO CUSTO', 'PRECO DE CUSTO', 'CUSTO UNITARIO',
+        'CUSTO UNIT', 'VALOR CUSTO', 'CUSTO R$', 'CUSTO (R$)',
+        'VL CUSTO', 'VALOR DE CUSTO', 'PRECO MEDIO CUSTO', 'CUSTO MEDIO',
+        'CUSTO UNITÁRIO', 'PREÇO DE CUSTO', 'PREÇO CUSTO',
     ]
-    
-    # Normaliza todas as colunas para comparação
     colunas_normalizadas = {col: normalizar_texto(col) for col in colunas}
-    
-    # Busca match exato
     for col_original, col_norm in colunas_normalizadas.items():
         if col_norm in variacoes_custo:
             logger.info(f"✅ Coluna de custo encontrada por nome: '{col_original}' (normalizado: '{col_norm}')")
             return col_original
-    
-    # Se não encontrou match exato, busca por substring
     for col_original, col_norm in colunas_normalizadas.items():
-        if 'CUSTO' in col_norm and 'TOTAL' not in col_norm:
-            logger.info(f"✅ Coluna de custo encontrada por substring: '{col_original}' (normalizado: '{col_norm}')")
+        if 'CUSTO' in col_norm and 'TOTAL' not in col_norm and 'QUEBRA' not in col_norm:
+            logger.info(f"✅ Coluna de custo encontrada por substring: '{col_original}'")
             return col_original
-    
     logger.error(f"❌ Coluna de custo NÃO encontrada. Colunas disponíveis: {list(colunas)}")
     return None
 
 
 def detectar_coluna_marca(colunas):
-    """
-    BUG 2 FIX: Detecta coluna que identifica a marca (Boticário/Eudora/QDB).
-    
-    Busca por: MARCA, BRAND, LINHA, PRODUTO_LINHA, etc.
-    
-    Returns:
-        str: Nome da coluna de marca ou None
-    """
-    variacoes_marca = [
-        'MARCA',
-        'BRAND',
-        'LINHA',
-        'LINHA PRODUTO',
-        'PRODUTO LINHA',
-        'CATEGORIA MARCA',
-        'TIPO MARCA',
-    ]
-    
+    """BUG 2 FIX: Detecta coluna que identifica a marca."""
+    variacoes_marca = ['MARCA', 'BRAND', 'LINHA', 'LINHA PRODUTO', 'PRODUTO LINHA',
+                       'MARCA REFERENCIA', 'LINHA MARCA']
     colunas_normalizadas = {col: normalizar_texto(col) for col in colunas}
-    
     for col_original, col_norm in colunas_normalizadas.items():
         if col_norm in variacoes_marca:
             logger.info(f"✅ Coluna de marca encontrada: '{col_original}'")
             return col_original
-    
+    return None
+
+
+def _mapear_marca(valor_marca):
+    """BUG 2 FIX: Mapeia valor da coluna de marca para MARCA_REFERENCIA padrão."""
+    if pd.isna(valor_marca) or valor_marca is None:
+        return None
+    marca_norm = normalizar_texto(valor_marca)
+    if 'BOTICARIO' in marca_norm or marca_norm == 'BOT':
+        return 'O Boticário'
+    elif 'EUDORA' in marca_norm or marca_norm == 'EUD':
+        return 'Eudora'
+    elif 'QUEM DISSE' in marca_norm or 'BERENICE' in marca_norm or marca_norm == 'QDB':
+        return 'Quem Disse, Berenice?'
     return None
 
 
@@ -356,9 +296,8 @@ def detectar_coluna_marca(colunas):
 def criar_sessao_com_retry():
     session = requests.Session()
     retry = Retry(
-        total=3, 
-        backoff_factor=1, 
-        status_forcelist=[429, 500, 502, 503, 504], 
+        total=3, backoff_factor=1,
+        status_forcelist=[429, 500, 502, 503, 504],
         allowed_methods=["GET"]
     )
     adapter = HTTPAdapter(max_retries=retry)
@@ -371,17 +310,13 @@ def criar_sessao_com_retry():
 def download_planilha_excel(url_planilha, nome_planilha):
     logger.info(f"Iniciando download: {nome_planilha}")
     session = criar_sessao_com_retry()
-    
     try:
         response = session.get(url_planilha, timeout=TIMEOUT_DOWNLOAD, stream=True)
         response.raise_for_status()
-        
         content = response.content
         tamanho_kb = len(content) / 1024
-        
         logger.info(f"✅ Download concluído: {nome_planilha} ({tamanho_kb:.1f} KB)")
         return BytesIO(content)
-        
     except Exception as e:
         logger.error(f"❌ Erro ao baixar {nome_planilha}: {str(e)}")
         logger.error(traceback.format_exc())
@@ -395,12 +330,9 @@ def download_planilha_sharepoint(url_compartilhamento, nome_planilha):
         logger.error("❌ sharepoint_utils.py não disponível")
         st.error("Módulo SharePoint não encontrado. Verifique sharepoint_utils.py")
         return None
-    
     logger.info(f"Iniciando download SharePoint: {nome_planilha}")
-    
     try:
         buffer = baixar_arquivo_sharepoint(url_compartilhamento, nome_planilha)
-        
         if buffer:
             logger.info(f"✅ Download SharePoint concluído: {nome_planilha}")
             return buffer
@@ -408,9 +340,8 @@ def download_planilha_sharepoint(url_compartilhamento, nome_planilha):
             logger.error(f"❌ Falha no download SharePoint: {nome_planilha}")
             st.error(f"Falha ao carregar {nome_planilha} do SharePoint")
             return None
-    
     except Exception as e:
-        logger.error(f"❌ Erro ao baixar {nome_planilha} do SharePoint: {str(e)}")
+        logger.error(f"❌ Erro ao baixar {nome_planilha}: {str(e)}")
         logger.error(traceback.format_exc())
         st.error(f"Falha ao carregar {nome_planilha}: {str(e)[:200]}")
         return None
@@ -423,40 +354,29 @@ def download_planilha_sharepoint(url_compartilhamento, nome_planilha):
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def carregar_skus_ignorados(ignorados_buffer):
     logger.info("Carregando planilha de SKUs Ignorados...")
-    
     try:
         if ignorados_buffer is None:
             logger.warning("Planilha de Ignorados não fornecida")
             return set()
-        
         excel_file = pd.ExcelFile(ignorados_buffer)
-        
         if not excel_file.sheet_names:
             logger.error("Ignorados: nenhuma aba encontrada")
             return set()
-        
         df = pd.read_excel(excel_file, sheet_name=excel_file.sheet_names[0])
-        
         if df.empty:
-            logger.warning("Ignorados: planilha vazia")
+            logger.info("ℹ️ Ignorados: planilha vazia (comportamento esperado - nenhum SKU será ignorado)")
             return set()
-        
         df.columns = [str(col).strip().upper() for col in df.columns]
-        
-        colunas_sku = ['SKU', 'CÓDIGO', 'CODIGO', 'CÓDIGO SKU', 'CODIGO SKU', 
+        colunas_sku = ['SKU', 'CÓDIGO', 'CODIGO', 'CÓDIGO SKU', 'CODIGO SKU',
                        'EAN', 'COD PRODUTO', 'CÓDIGO PRODUTO', 'IGNORAR']
         coluna_sku = next((c for c in colunas_sku if c in df.columns), None)
-        
         if coluna_sku is None:
             logger.error(f"Ignorados: coluna SKU não encontrada. Colunas: {list(df.columns)}")
             return set()
-        
         skus_ignorados = set(df[coluna_sku].apply(normalizar_sku))
         skus_ignorados.discard("")
-        
         logger.info(f"✅ SKUs Ignorados carregados: {len(skus_ignorados)} SKUs")
         return skus_ignorados
-        
     except Exception as e:
         logger.error(f"Erro ao carregar SKUs Ignorados: {str(e)}")
         logger.error(traceback.format_exc())
@@ -465,76 +385,53 @@ def carregar_skus_ignorados(ignorados_buffer):
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def carregar_planilha_retaguarda(custos_buffer):
-    """
-    BUG 1 FIX: Carrega planilha de Retaguarda com busca de coluna de custo por NOME.
-    
-    Melhorias:
-    1. Busca coluna de custo por nome (não por posição fixa)
-    2. Normaliza PDV para aceitar formatos variados
-    3. Diagnóstico detalhado de linhas rejeitadas
-    4. Alerta visual quando SKUs matcheados = 0
-    """
+    """BUG 1 FIX: Carrega planilha de Retaguarda com busca de coluna de custo por NOME."""
     logger.info("Carregando planilha Retaguarda (custos)...")
-    
     try:
         if custos_buffer is None:
             logger.warning("Planilha Retaguarda não fornecida")
             return pd.DataFrame()
-        
         excel_file = pd.ExcelFile(custos_buffer)
         logger.info(f"Abas encontradas na Retaguarda: {excel_file.sheet_names}")
-        
         if not excel_file.sheet_names:
             logger.error("Retaguarda: nenhuma aba encontrada")
             return pd.DataFrame()
-        
         df = pd.read_excel(excel_file, sheet_name=excel_file.sheet_names[0])
-        
         if df.empty:
             logger.warning("Retaguarda: planilha vazia")
             return pd.DataFrame()
-        
         df.columns = [str(col).strip().upper() for col in df.columns]
         logger.info(f"Colunas encontradas: {list(df.columns)}")
-        
-        # ==========================================================================
-        # BUG 1 FIX: Busca coluna de SKU por nome
-        # ==========================================================================
-        colunas_sku = ['SKU', 'CÓDIGO', 'CODIGO', 'CÓDIGO SKU', 'CODIGO SKU', 
-                       'EAN', 'COD PRODUTO', 'CÓDIGO PRODUTO', 'CODIGO', 'CÓDIGO']
+
+        colunas_sku = ['SKU', 'CÓDIGO', 'CODIGO', 'CÓDIGO SKU', 'CODIGO SKU',
+                       'EAN', 'COD PRODUTO', 'CÓDIGO PRODUTO']
         coluna_sku = next((c for c in colunas_sku if c in df.columns), None)
-        
-        # ==========================================================================
+
         # BUG 1 FIX: Busca coluna de CUSTO por NOME (não por posição!)
-        # ==========================================================================
         coluna_custo = detectar_coluna_custo(df.columns)
-        
+
         if coluna_sku is None:
             logger.error(f"Retaguarda: coluna SKU não encontrada. Colunas: {list(df.columns)}")
             return pd.DataFrame()
-        
+
         if coluna_custo is None:
             logger.error(f"Retaguarda: coluna CUSTO não encontrada!")
             logger.error(f"Colunas disponíveis: {list(df.columns)}")
-            st.warning("⚠️ **Planilha Retaguarda sem coluna de CUSTO.** Verifique se a planilha correta está configurada.")
+            st.warning("⚠️ **Planilha Retaguarda sem coluna de CUSTO.** Verifique se a planilha correta está configurada no config.py.")
             return pd.DataFrame()
-        
+
         logger.info(f"✅ Colunas detectadas - SKU: '{coluna_sku}', Custo: '{coluna_custo}'")
-        
-        # ==========================================================================
-        # BUG 1 FIX: Normaliza SKU e CUSTO
-        # ==========================================================================
+
         df_resultado = pd.DataFrame()
         df_resultado['SKU'] = df[coluna_sku].apply(normalizar_sku)
         df_resultado['CUSTO_RETARGUARDA'] = pd.to_numeric(df[coluna_custo], errors='coerce').fillna(0)
-        
-        # ==========================================================================
+
         # BUG 1 FIX: Busca coluna de PDV/LOJA e normaliza
-        # ==========================================================================
         colunas_loja = ['LOJA', 'PDV', 'LOJA/PDV', 'LOJA - PDV', 'CÓDIGO LOJA', 'CODIGO LOJA',
-                       'FILIAL', 'COD FILIAL', 'LOJA NOME', 'NOME LOJA', 'PDV_CODIGO', 'COD PDV']
+                       'FILIAL', 'COD FILIAL', 'LOJA NOME', 'NOME LOJA', 'PDV_CODIGO', 'COD PDV',
+                       'LOJA CODIGO', 'COD LOJA']
         coluna_loja = next((c for c in colunas_loja if c in df.columns), None)
-        
+
         if coluna_loja is None:
             logger.info("Retaguarda: sem coluna de loja/PDV. Aplicando custos para todos os PDVs.")
             todos_pdvs = list(DE_PARA_LOJAS.keys())
@@ -545,53 +442,46 @@ def carregar_planilha_retaguarda(custos_buffer):
                 df_expandido.append(df_temp)
             df_resultado = pd.concat(df_expandido, ignore_index=True)
         else:
-            # BUG 1 FIX: Usa normalizar_pdv() ao invés de conversão direta
             logger.info(f"Retaguarda: coluna de PDV encontrada: '{coluna_loja}'")
-            
-            # Diagnóstico: mostra tipos e valores únicos da coluna PDV
             logger.info(f"📊 Diagnóstico PDV - Tipo original: {df[coluna_loja].dtype}")
             valores_unicos = df[coluna_loja].dropna().unique()[:10]
             logger.info(f"📊 Diagnóstico PDV - Primeiros 10 valores únicos: {valores_unicos}")
-            
+
             df_resultado['PDV_RAW'] = df[coluna_loja]
             df_resultado['PDV'] = df[coluna_loja].apply(normalizar_pdv)
-            
-            # Diagnóstico: quantos PDVs foram normalizados com sucesso
+
             pdvs_validos = df_resultado['PDV'].notna().sum()
             pdvs_invalidos = df_resultado['PDV'].isna().sum()
             logger.info(f"📊 Diagnóstico PDV - Válidos: {pdvs_validos}, Inválidos: {pdvs_invalidos}")
-            
-            # Mostra exemplos de PDVs inválidos
+
             if pdvs_invalidos > 0:
                 exemplos_invalidos = df_resultado[df_resultado['PDV'].isna()]['PDV_RAW'].head(5).tolist()
                 logger.warning(f"⚠️ Exemplos de PDVs inválidos: {exemplos_invalidos}")
-            
-            # Mapeia PDV normalizado para código numérico
+
             df_resultado['PDV_MAPEADO'] = df_resultado['PDV'].apply(
-                lambda x: int(x) if x and x.isdigit() and int(x) in DE_PARA_LOJAS else None
+                lambda x: int(x) if x and str(x).replace('.', '').isdigit() and int(float(x)) in DE_PARA_LOJAS else None
             )
-            
-            # Mantém apenas PDVs válidos
+
             antes = len(df_resultado)
             df_resultado = df_resultado[df_resultado['PDV_MAPEADO'].notna()].copy()
             depois = len(df_resultado)
-            
+
             if antes != depois:
                 logger.warning(f"Retaguarda: {antes - depois} linhas rejeitadas (PDV inválido ou não mapeado)")
-            
+
             df_resultado['PDV'] = df_resultado['PDV_MAPEADO']
-        
+
         if df_resultado.empty:
             logger.error("Retaguarda: nenhum dado válido após processamento")
             return pd.DataFrame()
-        
+
         df_resultado['PDV'] = df_resultado['PDV'].astype(int)
         df_resultado = df_resultado.sort_values('CUSTO_RETARGUARDA', ascending=False)
         df_resultado = df_resultado.drop_duplicates(subset=['PDV', 'SKU'], keep='first')
-        
+
         logger.info(f"✅ Retaguarda carregada: {len(df_resultado)} registros")
         return df_resultado[['PDV', 'SKU', 'CUSTO_RETARGUARDA']].copy()
-        
+
     except Exception as e:
         logger.error(f"Erro ao carregar Retaguarda: {str(e)}")
         logger.error(traceback.format_exc())
@@ -600,55 +490,38 @@ def carregar_planilha_retaguarda(custos_buffer):
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def carregar_estoque_seguranca(seguranca_buffer):
-    """
-    BUG 2 FIX: Carrega planilha de Estoque de Segurança com suporte a:
-    1. Formato antigo: 3 abas separadas (BOT, EUD, QDB) - fallback retroativo
-    2. Formato novo: 1 aba consolidada (saldo-estoque-*) com coluna de marca
-    
-    Detecta automaticamente qual formato está presente e processa corretamente.
-    """
+    """BUG 2 FIX: Suporta formato antigo (3 abas) e novo (aba consolidada)."""
     logger.info("Carregando planilha de estoque de segurança...")
-    
     try:
         if seguranca_buffer is None:
             logger.warning("Planilha de segurança não fornecida")
             return pd.DataFrame()
-        
         excel_file = pd.ExcelFile(seguranca_buffer)
         abas_disponiveis = excel_file.sheet_names
         logger.info(f"Abas disponíveis na Segurança: {abas_disponiveis}")
-        
-        # ==========================================================================
+
         # FORMATO 1: Tenta formato antigo (3 abas separadas BOT/EUD/QDB)
-        # ==========================================================================
         abas_esperadas = ['BOT', 'EUD', 'QDB']
         abas_encontradas = [aba for aba in abas_esperadas if aba.upper() in [a.upper() for a in abas_disponiveis]]
-        
         if abas_encontradas:
             logger.info(f"✅ Formato antigo detectado: {len(abas_encontradas)} abas separadas (BOT/EUD/QDB)")
             return _carregar_seguranca_formato_antigo(excel_file, abas_encontradas)
-        
-        # ==========================================================================
+
         # FORMATO 2: Tenta formato novo (aba consolidada saldo-estoque-*)
-        # ==========================================================================
         aba_consolidada = None
         for aba in abas_disponiveis:
             if aba.lower().startswith('saldo-estoque'):
                 aba_consolidada = aba
                 break
-        
-        # Se não encontrou por padrão, usa a primeira aba
         if aba_consolidada is None and abas_disponiveis:
             aba_consolidada = abas_disponiveis[0]
             logger.info(f"⚠️ Nenhuma aba 'saldo-estoque-*' encontrada. Usando primeira aba: '{aba_consolidada}'")
-        
         if aba_consolidada:
             logger.info(f"✅ Formato novo detectado: aba consolidada '{aba_consolidada}'")
             return _carregar_seguranca_formato_novo(excel_file, aba_consolidada)
-        
+
         logger.error("Segurança: nenhuma aba válida encontrada")
         return pd.DataFrame()
-        
     except Exception as e:
         logger.error(f"Erro ao carregar segurança: {str(e)}")
         logger.error(traceback.format_exc())
@@ -656,224 +529,130 @@ def carregar_estoque_seguranca(seguranca_buffer):
 
 
 def _carregar_seguranca_formato_antigo(excel_file, abas_encontradas):
-    """
-    BUG 2 FIX: Carrega formato antigo (3 abas separadas BOT/EUD/QDB).
-    Mantém a lógica original para compatibilidade retroativa.
-    """
+    """BUG 2 FIX: Carrega formato antigo (3 abas separadas BOT/EUD/QDB)."""
     dfs_abas = []
     for aba_nome in abas_encontradas:
         try:
             aba_exata = [nome for nome in excel_file.sheet_names if nome.upper() == aba_nome.upper()][0]
             df_abas = pd.read_excel(excel_file, sheet_name=aba_exata)
-            
             if df_abas.empty:
                 continue
-            
             df_abas.columns = [col.strip().upper() for col in df_abas.columns]
-            
             if 'PDV' not in df_abas.columns or 'SKU' not in df_abas.columns:
                 logger.warning(f"Segurança aba {aba_nome}: colunas PDV/SKU faltantes")
                 continue
-            
             colunas_est = ['ESTOQUE DE SEGURANCA', 'ESTOQUE_DE_SEGURANCA', 'ESTOQUE_SEGURANCA',
                           'ESTOQUE MINIMO', 'ESTOQUE_MINIMO', 'MINIMO', 'SEGURANCA', 'QTD_MINIMA']
             coluna_est = next((c for c in colunas_est if c in df_abas.columns), None)
-            
             if coluna_est is None:
                 df_abas['ESTOQUE_DE_SEGURANCA'] = 0
             else:
                 df_abas = df_abas.rename(columns={coluna_est: 'ESTOQUE_DE_SEGURANCA'})
                 df_abas['ESTOQUE_DE_SEGURANCA'] = pd.to_numeric(df_abas['ESTOQUE_DE_SEGURANCA'], errors='coerce').fillna(0)
-            
             df_abas['PDV'] = pd.to_numeric(df_abas['PDV'], errors='coerce')
             df_abas['SKU'] = df_abas['SKU'].apply(normalizar_sku)
             df_abas['MARCA_REFERENCIA'] = ABAS_SEGURANCA.get(aba_nome, aba_nome)
-            
             dfs_abas.append(df_abas[['PDV', 'SKU', 'ESTOQUE_DE_SEGURANCA', 'MARCA_REFERENCIA']].copy())
-            
         except Exception as e:
             logger.error(f"Erro ao processar aba {aba_nome} da segurança: {str(e)}")
             logger.error(traceback.format_exc())
             continue
-    
     if dfs_abas:
         df_final = pd.concat(dfs_abas, ignore_index=True)
         logger.info(f"✅ Estoque de segurança carregado (formato antigo): {len(df_final)} registros")
         return df_final
-    
     logger.warning("Segurança: nenhum dado válido encontrado (formato antigo)")
     return pd.DataFrame()
 
 
 def _carregar_seguranca_formato_novo(excel_file, aba_consolidada):
-    """
-    BUG 2 FIX: Carrega formato novo (aba consolidada com coluna de marca/PDV).
-    
-    Detecta automaticamente a coluna que identifica a marca e mapeia para
-    as 3 marcas (Boticário/Eudora/Quem Disse, Berenice?).
-    """
+    """BUG 2 FIX: Carrega formato novo (aba consolidada com coluna de marca/PDV)."""
     try:
         df = pd.read_excel(excel_file, sheet_name=aba_consolidada)
-        
         if df.empty:
             logger.warning(f"Segurança: aba '{aba_consolidada}' está vazia")
             return pd.DataFrame()
-        
         df.columns = [col.strip().upper() for col in df.columns]
         logger.info(f"Colunas na aba consolidada: {list(df.columns)}")
-        
-        # ==========================================================================
-        # Detecta colunas necessárias
-        # ==========================================================================
-        # SKU
+
         colunas_sku = ['SKU', 'CÓDIGO', 'CODIGO', 'CÓDIGO SKU', 'CODIGO SKU', 'EAN']
         coluna_sku = next((c for c in colunas_sku if c in df.columns), None)
-        
-        # PDV
+
         colunas_pdv = ['PDV', 'LOJA', 'COD LOJA', 'CÓDIGO LOJA', 'CODIGO LOJA', 'FILIAL']
         coluna_pdv = next((c for c in colunas_pdv if c in df.columns), None)
-        
-        # Estoque de Segurança
+
         colunas_est = ['ESTOQUE DE SEGURANCA', 'ESTOQUE_DE_SEGURANCA', 'ESTOQUE_SEGURANCA',
                       'ESTOQUE MINIMO', 'ESTOQUE_MINIMO', 'MINIMO', 'SEGURANCA', 'QTD_MINIMA',
                       'EST. MINIMO', 'EST. MÍNIMO', 'ESTOQUE MIN']
         coluna_est = next((c for c in colunas_est if c in df.columns), None)
-        
-        # Marca (opcional - pode ser inferida pelo PDV)
+
         coluna_marca = detectar_coluna_marca(df.columns)
-        
+
         if coluna_sku is None or coluna_pdv is None:
             logger.error(f"Segurança: colunas SKU ou PDV não encontradas. SKU={coluna_sku}, PDV={coluna_pdv}")
             return pd.DataFrame()
-        
+
         if coluna_est is None:
             logger.warning("Segurança: coluna de estoque de segurança não encontrada. Usando 0.")
             df['ESTOQUE_DE_SEGURANCA'] = 0
         else:
             df['ESTOQUE_DE_SEGURANCA'] = pd.to_numeric(df[coluna_est], errors='coerce').fillna(0)
-        
-        # ==========================================================================
-        # Normaliza PDV e SKU
-        # ==========================================================================
+
         df['PDV'] = df[coluna_pdv].apply(normalizar_pdv)
         df['SKU'] = df[coluna_sku].apply(normalizar_sku)
-        
-        # Converte PDV para int se possível
         df['PDV_NUM'] = pd.to_numeric(df['PDV'], errors='coerce')
-        
-        # ==========================================================================
-        # Determina MARCA_REFERENCIA
-        # ==========================================================================
+
         if coluna_marca:
-            # Usa coluna de marca direta
             logger.info(f"✅ Usando coluna de marca: '{coluna_marca}'")
             df['MARCA_REFERENCIA'] = df[coluna_marca].apply(_mapear_marca)
+            # Filtra apenas linhas com marca reconhecida
+            df = df[df['MARCA_REFERENCIA'].notna()].copy()
         else:
-            # Tenta inferir marca pelo PDV (se cada PDV pertence a uma marca específica)
-            # ou assume que todos os SKUs se aplicam a todas as marcas
-            logger.info("⚠️ Coluna de marca não encontrada. Tentando inferir pelo PDV ou aplicando para todas as marcas.")
-            
-            # Se há poucos PDVs únicos, pode ser que cada PDV tenha uma marca
-            pdvs_unicos = df['PDV_NUM'].dropna().unique()
-            if len(pdvs_unicos) <= 3:
-                logger.info(f"Detectados {len(pdvs_unicos)} PDVs únicos. Mapeando para marcas.")
-                # Mapeia PDVs para marcas (assumindo ordem: Boticário, Eudora, QDB)
-                marcas_possiveis = list(ABAS_SEGURANCA.values())
-                mapeamento_pdv_marca = {}
-                for i, pdv in enumerate(sorted(pdvs_unicos)):
-                    if i < len(marcas_possiveis):
-                        mapeamento_pdv_marca[pdv] = marcas_possiveis[i]
-                
-                df['MARCA_REFERENCIA'] = df['PDV_NUM'].map(mapeamento_pdv_marca)
-            else:
-                # Muitos PDVs: aplica para todas as marcas
-                logger.info(f"Muitos PDVs ({len(pdvs_unicos)}). Aplicando estoque de segurança para todas as marcas.")
-                # Duplica para cada marca
-                dfs_marcas = []
-                for marca in ABAS_SEGURANCA.values():
-                    df_temp = df.copy()
-                    df_temp['MARCA_REFERENCIA'] = marca
-                    dfs_marcas.append(df_temp)
-                df = pd.concat(dfs_marcas, ignore_index=True)
-        
-        # ==========================================================================
-        # Filtra e retorna
-        # ==========================================================================
+            logger.info("⚠️ Coluna de marca não encontrada. Aplicando estoque de segurança para todas as marcas.")
+            dfs_marcas = []
+            for marca in ABAS_SEGURANCA.values():
+                df_temp = df.copy()
+                df_temp['MARCA_REFERENCIA'] = marca
+                dfs_marcas.append(df_temp)
+            df = pd.concat(dfs_marcas, ignore_index=True)
+
         df_valido = df[df['PDV_NUM'].notna() & (df['SKU'] != '')].copy()
-        
         if df_valido.empty:
             logger.error("Segurança: nenhum dado válido após processamento")
             return pd.DataFrame()
-        
+
         df_valido['PDV'] = df_valido['PDV_NUM'].astype(int)
-        
         logger.info(f"✅ Estoque de segurança carregado (formato novo): {len(df_valido)} registros")
         return df_valido[['PDV', 'SKU', 'ESTOQUE_DE_SEGURANCA', 'MARCA_REFERENCIA']].copy()
-        
     except Exception as e:
         logger.error(f"Erro ao processar aba consolidada: {str(e)}")
         logger.error(traceback.format_exc())
         return pd.DataFrame()
 
 
-def _mapear_marca(valor_marca):
-    """
-    BUG 2 FIX: Mapeia valor da coluna de marca para MARCA_REFERENCIA padrão.
-    
-    Aceita variações como:
-    - "Boticário", "O Boticário", "BOTICARIO", "BOT" → "O Boticário"
-    - "Eudora", "EUDORA", "EUD" → "Eudora"
-    - "Quem Disse", "QDB", "QUEM_DISSE" → "Quem Disse, Berenice?"
-    """
-    if pd.isna(valor_marca) or valor_marca is None:
-        return None
-    
-    marca_norm = normalizar_texto(valor_marca)
-    
-    # Mapeamento normalizado
-    if 'BOTICARIO' in marca_norm or 'BOT' == marca_norm:
-        return 'O Boticário'
-    elif 'EUDORA' in marca_norm or 'EUD' == marca_norm:
-        return 'Eudora'
-    elif 'QUEM DISSE' in marca_norm or 'BERENICE' in marca_norm or 'QDB' == marca_norm:
-        return 'Quem Disse, Berenice?'
-    
-    return None
-
-
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def carregar_dados_principais(draft_buffer):
-    """
-    Carrega planilha principal DRAFT_PDVS com DETECÇÃO DINÂMICA de colunas de histórico.
-    """
+    """Carrega planilha principal DRAFT_PDVS com DETECÇÃO DINÂMICA de colunas de histórico."""
     logger.info("Carregando planilha principal DRAFT_PDVS...")
-    
     try:
         if draft_buffer is None:
             logger.error("Planilha principal não fornecida")
             return {}, None
-        
         excel_file = pd.ExcelFile(draft_buffer)
         abas_disponiveis = excel_file.sheet_names
         logger.info(f"Abas disponíveis na principal: {abas_disponiveis}")
-        
         abas_esperadas = list(NOMES_MARCAS.keys())
         abas_faltantes = [aba for aba in abas_esperadas if aba not in abas_disponiveis]
-        
         if abas_faltantes:
             logger.error(f"Principal: abas faltantes: {abas_faltantes}")
             st.error(f"❌ Abas esperadas não encontradas: {abas_faltantes}")
             st.info(f"Abas disponíveis: {abas_disponiveis}")
             return {}, None
-        
         dicionario_marcas = {}
         data_atualizacao = None
-        
         for aba_excel, nome_exibicao in NOMES_MARCAS.items():
             logger.info(f"Processando aba: {aba_excel} → {nome_exibicao}")
-            
             try:
-                # Tenta diferentes configurações de header
                 df = None
                 for header_row in [0, 1, 2]:
                     try:
@@ -885,54 +664,39 @@ def carregar_dados_principais(draft_buffer):
                     except Exception as e_header:
                         logger.warning(f"Tentativa header={header_row} falhou: {str(e_header)}")
                         continue
-                
                 if df is None or df.empty:
                     logger.error(f"❌ Aba {aba_excel}: não foi possível carregar dados (DataFrame vazio)")
                     continue
-                
-                # DIAGNÓSTICO
                 logger.info(f"📊 DataFrame carregado - Shape: {df.shape}")
                 logger.info(f"📊 Colunas: {list(df.columns)[:10]}...")
-                
                 colunas_faltantes = [col for col in COLUNAS_OBRIGATORIAS["draft_pdvs"] if col not in df.columns]
                 if colunas_faltantes:
                     logger.error(f"Aba {aba_excel}: colunas faltantes: {colunas_faltantes}")
                     st.error(f"❌ Aba {aba_excel} está faltando colunas: {colunas_faltantes}")
                     continue
-                
                 df['Marca'] = nome_exibicao
                 df['PDV'] = pd.to_numeric(df['PDV'], errors='coerce')
                 df['Estoque Atual'] = pd.to_numeric(df['Estoque Atual'], errors='coerce').fillna(0)
                 df['Preço tabela'] = pd.to_numeric(df['Preço tabela'], errors='coerce').fillna(0)
                 df['SKU'] = df['SKU'].apply(normalizar_sku)
-                
-                # Remove linhas com PDV ou SKU inválidos
                 antes_limpeza = len(df)
                 df = df[df['PDV'].notna() & (df['SKU'] != '')]
                 depois_limpeza = len(df)
                 if antes_limpeza != depois_limpeza:
                     logger.info(f"🧹 Removidas {antes_limpeza - depois_limpeza} linhas com PDV/SKU inválidos")
-                
-                # Preserva coluna "Classe Segmentada"
                 if COLUNA_CLASSE_SEGMENTADA in df.columns:
                     logger.info(f"✅ Coluna '{COLUNA_CLASSE_SEGMENTADA}' encontrada e preservada")
-                
-                # Coluna Estoque em Trânsito
-                colunas_transito = ['Estoque em Trânsito', 'Estoque em Transito', 'Estoque Transito', 
+                colunas_transito = ['Estoque em Trânsito', 'Estoque em Transito', 'Estoque Transito',
                                    'Em Trânsito', 'Em Transito', 'Trânsito', 'Transito']
                 coluna_transito = next((c for c in colunas_transito if c in df.columns), None)
-                
                 if coluna_transito:
                     df['Estoque em Trânsito'] = pd.to_numeric(df[coluna_transito], errors='coerce').fillna(0)
                     logger.info(f"✅ Coluna 'Estoque em Trânsito' encontrada: {coluna_transito}")
                 else:
                     df['Estoque em Trânsito'] = 0
                     logger.warning(f"Aba {aba_excel}: coluna 'Estoque em Trânsito' não encontrada. Usando 0.")
-                
-                # CÁLCULO DE DDV COM DETECÇÃO DINÂMICA
                 try:
                     colunas_historico = detectar_colunas_historico(df.columns)
-                    
                     if colunas_historico:
                         df_hist = df[colunas_historico].apply(pd.to_numeric, errors='coerce').fillna(0)
                         df['Historico_Total'] = df_hist.sum(axis=1)
@@ -946,24 +710,18 @@ def carregar_dados_principais(draft_buffer):
                     logger.error(f"Erro ao calcular DDV na aba {aba_excel}: {str(e_ddv)}")
                     df['Historico_Total'] = 0
                     df['DDV'] = 0
-                
-                # Calcula Cobertura de Estoque
                 df['Cobertura_Estoque'] = np.where(
                     df['DDV'] > 0,
                     df['Estoque Atual'] / df['DDV'],
                     np.nan
                 )
-                
                 dicionario_marcas[nome_exibicao] = df
                 logger.info(f"✅ {aba_excel}: {len(df)} registros carregados")
-                
             except Exception as e:
                 logger.error(f"Erro ao processar aba {aba_excel}: {str(e)}")
                 logger.error(traceback.format_exc())
                 continue
-        
         return dicionario_marcas, data_atualizacao
-        
     except Exception as e:
         logger.error(f"Erro ao carregar planilha principal: {str(e)}")
         logger.error(traceback.format_exc())
@@ -972,14 +730,11 @@ def carregar_dados_principais(draft_buffer):
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def carregar_todos_os_dados():
-    """
-    Carrega todas as planilhas com downloads PARALELIZADOS.
-    """
+    """Carrega todas as planilhas com downloads PARALELIZADOS."""
     logger.info("=" * 60)
     logger.info("INICIANDO CARREGAMENTO DE DADOS")
     logger.info(f"MODO_ACESSO: {MODO_ACESSO}")
     logger.info("=" * 60)
-    
     stats = {
         'total_skus_retaguarda': 0,
         'skus_matcheados': 0,
@@ -988,23 +743,16 @@ def carregar_todos_os_dados():
         'skus_ignorados': 0,
         'skus_ignorados_filtrados': 0,
         'modo_acesso': MODO_ACESSO,
-        'retaguarda_sem_custo': False  # BUG 1: Flag para alerta visual
+        'retaguarda_sem_custo': False
     }
-    
     logger.info("Fase 1: Download PARALELO das planilhas...")
     st.session_state['progresso_atual'] = "Baixando planilhas em paralelo..."
-    
     if esta_no_modo_sharepoint():
         logger.info("📡 Usando fonte de dados: SHAREPOINT")
         if not SHAREPOINT_UTILS_AVAILABLE:
             st.error("❌ Modo SharePoint selecionado mas sharepoint_utils.py não está disponível")
             return {}, None, stats
-        
-        urls_planilhas = {
-            chave: config['url'] 
-            for chave, config in PLANILHAS_SHAREPOINT.items()
-        }
-        
+        urls_planilhas = {chave: config['url'] for chave, config in PLANILHAS_SHAREPOINT.items()}
         buffers = {}
         with ThreadPoolExecutor(max_workers=4) as executor:
             futures = {
@@ -1016,7 +764,6 @@ def carregar_todos_os_dados():
                     ('SKUs Ignorados', urls_planilhas['ignorados'])
                 ]
             }
-            
             for future in as_completed(futures):
                 nome = futures[future]
                 try:
@@ -1032,7 +779,6 @@ def carregar_todos_os_dados():
                 except Exception as e:
                     logger.error(f"Erro no download de {nome}: {str(e)}")
                     logger.error(traceback.format_exc())
-    
     else:
         logger.info("📡 Usando fonte de dados: GOOGLE SHEETS")
         urls_planilhas = {
@@ -1041,7 +787,6 @@ def carregar_todos_os_dados():
             'retaguarda': obter_url_exportacao('retaguarda'),
             'ignorados': obter_url_exportacao('ignorados')
         }
-        
         buffers = {}
         with ThreadPoolExecutor(max_workers=4) as executor:
             futures = {
@@ -1053,7 +798,6 @@ def carregar_todos_os_dados():
                     ('SKUs Ignorados', urls_planilhas['ignorados'])
                 ]
             }
-            
             for future in as_completed(futures):
                 nome = futures[future]
                 try:
@@ -1069,47 +813,35 @@ def carregar_todos_os_dados():
                 except Exception as e:
                     logger.error(f"Erro no download de {nome}: {str(e)}")
                     logger.error(traceback.format_exc())
-    
     logger.info("✅ Todos os downloads concluídos")
-    
     logger.info("Fase 2: Carregando SKUs ignorados...")
     st.session_state['progresso_atual'] = "Carregando SKUs ignorados..."
     skus_ignorados = carregar_skus_ignorados(buffers.get('ignorados'))
     stats['skus_ignorados'] = len(skus_ignorados)
-    
     logger.info("Fase 3: Processamento dos dados...")
     st.session_state['progresso_atual'] = "Processando planilha principal..."
-    
     dados_marcas, data_atualizacao = carregar_dados_principais(buffers.get('draft'))
     if not dados_marcas:
         logger.error("Nenhum dado foi carregado da planilha principal")
         return {}, None, stats
-    
     st.session_state['progresso_atual'] = "Carregando estoque de segurança..."
     df_estoque_seguranca = carregar_estoque_seguranca(buffers.get('seguranca'))
-    
     st.session_state['progresso_atual'] = "Carregando planilha de custos..."
     df_retaguarda = carregar_planilha_retaguarda(buffers.get('retaguarda'))
     stats['total_skus_retaguarda'] = len(df_retaguarda) if not df_retaguarda.empty else 0
-    
-    # BUG 1: Verifica se Retaguarda não tem coluna de custo
     if df_retaguarda.empty:
         stats['retaguarda_sem_custo'] = True
         logger.warning("⚠️ Retaguarda vazia ou sem coluna de custo. Custos não serão aplicados.")
-    
     if skus_ignorados:
         logger.info(f"Fase 4: Filtrando {len(skus_ignorados)} SKUs ignorados...")
-        
         if not df_retaguarda.empty:
             antes = len(df_retaguarda)
             df_retaguarda = df_retaguarda[~df_retaguarda['SKU'].isin(skus_ignorados)]
             logger.info(f"Retaguarda: {antes - len(df_retaguarda)} registros removidos (ignorados)")
-        
         if not df_estoque_seguranca.empty:
             antes = len(df_estoque_seguranca)
             df_estoque_seguranca = df_estoque_seguranca[~df_estoque_seguranca['SKU'].isin(skus_ignorados)]
             logger.info(f"Segurança: {antes - len(df_estoque_seguranca)} registros removidos (ignorados)")
-        
         total_filtrados = 0
         for nome_marca in dados_marcas.keys():
             antes = len(dados_marcas[nome_marca])
@@ -1118,52 +850,38 @@ def carregar_todos_os_dados():
             total_filtrados += filtrados
             if filtrados > 0:
                 logger.info(f"{nome_marca}: {filtrados} registros removidos (ignorados)")
-        
         stats['skus_ignorados_filtrados'] = total_filtrados
-    
     logger.info("Fase 5: Aplicando custos da Retaguarda...")
     st.session_state['progresso_atual'] = "Aplicando custos e calculando métricas..."
-    
     df_update_global = None
     if not df_retaguarda.empty:
         df_update_global = df_retaguarda[['PDV', 'SKU', 'CUSTO_RETARGUARDA']].copy()
         df_update_global = df_update_global.set_index(['PDV', 'SKU'])
         logger.info(f"DataFrame de custos preparado: {len(df_update_global)} registros")
-    
     for nome_marca, df in dados_marcas.items():
         df['CUSTO_RETARGUARDA'] = 0.0
-        
         if df_update_global is not None:
             idx = pd.MultiIndex.from_arrays([df['PDV'], df['SKU']])
             mask = idx.isin(df_update_global.index)
-            
             df.loc[mask, 'CUSTO_RETARGUARDA'] = df_update_global.loc[idx[mask], 'CUSTO_RETARGUARDA'].values
-            
             stats['skus_matcheados'] += int(mask.sum())
             stats['skus_sem_match'] += len(df) - int(mask.sum())
         else:
             stats['skus_sem_match'] += len(df)
-        
         preco_tabela = df['Preço tabela'].fillna(0)
         custo_retaguarda = df['CUSTO_RETARGUARDA'].fillna(0)
-        
         cond1 = (df['Preço tabela'].isna()) | (preco_tabela == 0)
         cond2 = custo_retaguarda > 0
-        
         df['Preço de Custo'] = np.where(
             cond1,
             custo_retaguarda,
             np.where(cond2, np.maximum(preco_tabela, custo_retaguarda), preco_tabela)
         )
-        
         custo_maior = (custo_retaguarda > preco_tabela) & (custo_retaguarda > 0)
         stats['skus_custo_maior'] += int(custo_maior.sum())
-        
         df = df.drop(columns=['CUSTO_RETARGUARDA'], errors='ignore')
-        
         if not df_estoque_seguranca.empty:
             df_seg = df_estoque_seguranca[df_estoque_seguranca['MARCA_REFERENCIA'] == nome_marca].copy()
-            
             if not df_seg.empty:
                 df = df.merge(df_seg[['PDV', 'SKU', 'ESTOQUE_DE_SEGURANCA']], on=['PDV', 'SKU'], how='left')
                 df['Estoque_Minimo_Qtd'] = df['ESTOQUE_DE_SEGURANCA'].fillna(0)
@@ -1172,7 +890,6 @@ def carregar_todos_os_dados():
                 df['Estoque_Minimo_Qtd'] = df['Classe'].map(REGRAS_ESTOQUE_MINIMO).fillna(2) if 'Classe' in df.columns else 2
         else:
             df['Estoque_Minimo_Qtd'] = df['Classe'].map(REGRAS_ESTOQUE_MINIMO).fillna(2) if 'Classe' in df.columns else 2
-        
         df['Valor_Estoque_Atual'] = df['Estoque Atual'] * df['Preço tabela']
         df['Valor_Estoque_Minimo'] = df['Estoque_Minimo_Qtd'] * df['Preço tabela']
         df['Qtd_Excesso'] = (df['Estoque Atual'] - df['Estoque_Minimo_Qtd']).clip(lower=0)
@@ -1181,9 +898,7 @@ def carregar_todos_os_dados():
         df['Valor_Falta'] = df['Qtd_Falta'] * df['Preço tabela']
         df['Valor_Custo_Estoque_Atual'] = df['Estoque Atual'] * df['Preço de Custo']
         df['Valor_Custo_Estoque_Minimo'] = df['Estoque_Minimo_Qtd'] * df['Preço de Custo']
-        
         dados_marcas[nome_marca] = df
-    
     logger.info("=" * 60)
     logger.info("CARREGAMENTO CONCLUÍDO")
     logger.info(f"Total SKUs Retaguarda: {stats['total_skus_retaguarda']}")
@@ -1195,9 +910,7 @@ def carregar_todos_os_dados():
     logger.info(f"Modo de acesso: {stats['modo_acesso']}")
     logger.info(f"Retaguarda sem custo: {stats['retaguarda_sem_custo']}")
     logger.info("=" * 60)
-    
     st.session_state['progresso_atual'] = "Carregamento concluído!"
-    
     return dados_marcas, data_atualizacao, stats
 
 
@@ -1208,7 +921,6 @@ def carregar_todos_os_dados():
 def exibir_kpi_card(col, icone, titulo, valor_fmt, delta_texto=None, cor_delta="#ff4b4b", help_text=None):
     delta_html = f'<div style="font-size:12px;color:{cor_delta};margin-top:4px;">{delta_texto}</div>' if delta_texto else ''
     help_icon = f'<span title="{help_text}" style="float:right;cursor:help;opacity:0.6;">ℹ️</span>' if help_text else ''
-    
     col.markdown(f"""
     <div style="
         background: linear-gradient(135deg,#111820,#0d1f14);
@@ -1271,37 +983,30 @@ def gerar_pdf_dashboard(dados_filtrados, pdv_selecionado, loja_selecionada_nome,
     if not REPORTLAB_AVAILABLE:
         st.error("Biblioteca reportlab não instalada.")
         return None
-
     buffer = BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4,
                             rightMargin=1.5*cm, leftMargin=1.5*cm,
                             topMargin=1.5*cm, bottomMargin=1.5*cm)
-
     COR_VERDE = colors.HexColor('#007A33')
     COR_DOURADO = colors.HexColor('#D4AF37')
     COR_TEXTO = colors.HexColor('#333333')
     COR_VERMELHO = colors.HexColor('#dc2626')
-
     styles = getSampleStyleSheet()
     estilo_titulo = ParagraphStyle('titulo', fontSize=16, textColor=COR_VERDE, fontName='Helvetica-Bold', spaceAfter=4)
     estilo_subtitulo = ParagraphStyle('subtitulo', fontSize=11, textColor=COR_VERDE, fontName='Helvetica-Bold', spaceAfter=4)
     estilo_normal = ParagraphStyle('normal', fontSize=9, textColor=COR_TEXTO, fontName='Helvetica', spaceAfter=2)
     estilo_rodape = ParagraphStyle('rodape', fontSize=8, textColor=colors.HexColor('#6b7e8a'), fontName='Helvetica', alignment=1)
-
     elementos = []
-
     try:
         if os.path.exists('logo_cp_fani.png'):
             logo = RLImage('logo_cp_fani.png', width=3*cm, height=2*cm)
             elementos.append(logo)
     except Exception as e:
         logger.error(f"Erro ao carregar logo no PDF: {str(e)}")
-
     elementos.append(Paragraph("Painel de Performance de Estoque NSF · CP Fani", estilo_titulo))
     elementos.append(Paragraph(f"PDV: {loja_selecionada_nome}  |  Marca: {marca_selecionada}", estilo_subtitulo))
     elementos.append(Paragraph(f"Gerado em: {horario_brasilia}", estilo_normal))
     elementos.append(Spacer(1, 0.5*cm))
-
     dados_kpi = [
         ['KPI', 'Valor'],
         ['Valor em Estoque (Tabela)', f"R$ {v_estoque_atual_total:,.2f}"],
@@ -1326,7 +1031,6 @@ def gerar_pdf_dashboard(dados_filtrados, pdv_selecionado, loja_selecionada_nome,
     ]))
     elementos.append(tabela_kpi)
     elementos.append(Spacer(1, 0.5*cm))
-
     for nome_marca, df_completo in dados_filtrados.items():
         if pdv_selecionado == 'TODAS':
             df_loja = df_completo
@@ -1334,7 +1038,6 @@ def gerar_pdf_dashboard(dados_filtrados, pdv_selecionado, loja_selecionada_nome,
             df_loja = df_completo[df_completo['PDV'] == pdv_selecionado]
         if df_loja.empty:
             continue
-
         df_flt = df_loja[df_loja['Valor_Falta'] > 0].sort_values('Valor_Falta', ascending=False).head(20)
         if not df_flt.empty:
             elementos.append(Paragraph(f"Produtos Críticos em Falta — {nome_marca}", estilo_subtitulo))
@@ -1365,10 +1068,8 @@ def gerar_pdf_dashboard(dados_filtrados, pdv_selecionado, loja_selecionada_nome,
             ]))
             elementos.append(t_flt)
             elementos.append(Spacer(1, 0.4*cm))
-
     elementos.append(Spacer(1, 1*cm))
     elementos.append(Paragraph(f"Grupo NSF · CP Fani  |  Gerado em: {horario_brasilia}", estilo_rodape))
-
     try:
         doc.build(elementos)
         buffer.seek(0)
@@ -1386,7 +1087,6 @@ def gerar_pdf_dashboard(dados_filtrados, pdv_selecionado, loja_selecionada_nome,
 def main():
     progresso_placeholder = st.empty()
     progresso_placeholder.info("🔄 Iniciando carregamento das planilhas...")
-    
     try:
         dados_marcas, data_atualizacao, stats = carregar_todos_os_dados()
     except Exception as e:
@@ -1394,41 +1094,31 @@ def main():
         logger.error(traceback.format_exc())
         st.error(f"❌ Erro crítico: {str(e)}")
         st.stop()
-    
     progresso_placeholder.empty()
-    
     horario_carregamento = obter_horario_brasilia()
-    
     if not dados_marcas:
         st.error("❌ Nenhum dado foi carregado. Verifique os logs acima.")
         st.info("""
         ### 🔧 Passos para resolver:
-        
         1. **Verifique o MODO_ACESSO no config.py:**
            - "publico" = Google Sheets público
            - "sharepoint" = SharePoint público
-        
         2. **Verifique se as planilhas estão acessíveis:**
            - Google: "Qualquer pessoa com o link" → "Leitor"
            - SharePoint: Link de compartilhamento público
-        
         3. **Verifique os IDs/URLs no config.py**
-        
         4. **Verifique os nomes das abas:**
            - DRAFT_PDVS: BOTICARIO, EUDORA, QUEM_DISSE_BERENICE
            - CONSULTA_DE_ESTOQUE: BOT, EUD, QDB
         """)
         st.stop()
-    
     if data_atualizacao:
         horario_exibicao = data_atualizacao
         info_timestamp = "🕒 Última atualização"
     else:
         horario_exibicao = horario_carregamento
         info_timestamp = "🕒 Carregado em"
-    
     col_logo, col_info = st.columns([1, 3])
-    
     with col_logo:
         try:
             if os.path.exists("logo_cp_fani.png"):
@@ -1438,7 +1128,6 @@ def main():
                 logger.warning("Logo CP Fani não encontrada")
         except Exception as e:
             logger.error(f"Erro ao carregar logo principal: {str(e)}")
-    
     with col_info:
         if esta_no_modo_sharepoint():
             modo_badge = '<span style="background:#0078d4;color:white;padding:2px 8px;border-radius:4px;font-size:10px;">SHAREPOINT</span>'
@@ -1446,7 +1135,6 @@ def main():
             modo_badge = '<span style="background:#f59e0b;color:white;padding:2px 8px;border-radius:4px;font-size:10px;">GOOGLE PRIVADO</span>'
         else:
             modo_badge = '<span style="background:#007A33;color:white;padding:2px 8px;border-radius:4px;font-size:10px;">GOOGLE PÚBLICO</span>'
-        
         st.markdown(f"""
         <div style="
             background: linear-gradient(135deg, #0d1f14 0%, #080b0f 100%);
@@ -1464,44 +1152,38 @@ def main():
             </div>
         </div>
         """, unsafe_allow_html=True)
-    
     st.markdown("---")
-    
-    # ==========================================================================
     # BUG 1 FIX: ALERTA VISUAL QUANDO RETAGUARDA NÃO TEM CUSTOS
-    # ==========================================================================
     if stats.get('retaguarda_sem_custo', False):
         st.error("""
         ⚠️ **ALERTA CRÍTICO: Custos da Retaguarda não estão sendo aplicados!**
-        
+
         A planilha de Retaguarda foi carregada mas **não contém coluna de CUSTO** ou está vazia.
         Todos os cálculos de "Preço de Custo" estão usando o **Preço de Tabela** como fallback.
-        
+
         **Impacto:**
         - KPI "Capital Preso" pode estar incorreto
         - Análise de custos por curva pode estar distorcida
-        
+
         **Ação necessária:**
         1. Verifique se a planilha correta está configurada no `config.py`
         2. Confirme se a planilha tem uma coluna chamada "CUSTO", "PREÇO DE CUSTO", etc.
         3. Verifique os logs para mais detalhes
         """)
-    
     # BUG 1 FIX: Alerta quando SKUs matcheados = 0 mas Retaguarda tem dados
     if stats.get('total_skus_retaguarda', 0) > 0 and stats.get('skus_matcheados', 0) == 0:
         st.warning("""
         ⚠️ **ALERTA: Nenhum SKU da Retaguarda foi casado com a planilha principal!**
-        
+
         A planilha de Retaguarda tem dados, mas **nenhum SKU encontrou correspondência** na planilha principal.
-        
+
         **Possíveis causas:**
         1. Formatos de SKU diferentes entre as planilhas (ex: "123" vs "0123")
         2. Planilhas de períodos diferentes
         3. Problema na normalização de SKUs
-        
+
         **Ação:** Verifique os logs para diagnóstico detalhado dos SKUs.
         """)
-    
     with st.expander("🔍 Diagnóstico de Carregamento (clique para ver)", expanded=False):
         col_d1, col_d2, col_d3, col_d4 = st.columns(4)
         col_d1.metric("SKUs na Retaguarda", f"{stats.get('total_skus_retaguarda', 0):,}",
@@ -1512,7 +1194,6 @@ def main():
                      help="SKUs sem custo na Retaguarda (usando Preço de Tabela como fallback)")
         col_d4.metric("Custo > Tabela", f"{stats.get('skus_custo_maior', 0):,}",
                      help="SKUs onde o custo da Retaguarda é maior que o Preço de Tabela")
-        
         if stats.get('skus_ignorados', 0) > 0:
             st.markdown("---")
             col_i1, col_i2, col_i3, _ = st.columns(4)
@@ -1523,29 +1204,22 @@ def main():
             col_i3.metric("SKUs Ativos", f"{stats.get('skus_matcheados', 0) + stats.get('skus_sem_match', 0):,}",
                          help="SKUs ativos após filtro de ignorados")
         else:
-            st.warning("⚠️ **Planilha de SKUs Ignorados não carregada.** Todos os SKUs serão incluídos nos cálculos.")
-    
-    if stats.get('total_skus_retaguarda', 0) == 0:
+            st.info("ℹ️ **Planilha de SKUs Ignorados vazia ou não carregada.** Todos os SKUs estão sendo incluídos nos cálculos.")
+    if stats.get('total_skus_retaguarda', 0) == 0 and not stats.get('retaguarda_sem_custo', False):
         st.warning("⚠️ **Planilha Retaguarda não carregada.** Usando Preço de Tabela como custo para todos os SKUs.")
-    
     st.markdown("---")
-    
     st.sidebar.title("Filtros de Visualização")
-    
     todos_pdvs = sorted(set(
         int(pdv)
         for df in dados_marcas.values()
         for pdv in df['PDV'].dropna()
     ))
-    
     opcoes_selectbox = ["Todas as Lojas"] + [DE_PARA_LOJAS.get(pdv, f"PDV {pdv}") for pdv in todos_pdvs]
-    
     loja_selecionada_nome = st.sidebar.selectbox(
-        "Selecione a Loja / PDV:", 
+        "Selecione a Loja / PDV:",
         opcoes_selectbox,
         help="Escolha um PDV específico ou 'Todas as Lojas' para ver o consolidado geral"
     )
-    
     if loja_selecionada_nome == "Todas as Lojas":
         pdv_selecionado = 'TODAS'
     else:
@@ -1553,17 +1227,14 @@ def main():
         if pdv_selecionado is None:
             st.error("PDV não reconhecido.")
             st.stop()
-    
     st.sidebar.markdown("---")
-    
     st.sidebar.subheader("Filtro de Marca")
     opcoes_marca = ["Todas as Marcas"] + list(dados_marcas.keys())
     marca_selecionada = st.sidebar.selectbox(
-        "Selecione a Marca:", 
+        "Selecione a Marca:",
         opcoes_marca,
         help="Filtre por uma marca específica ou veja todas consolidadas"
     )
-    
     st.sidebar.markdown("**Marcas disponíveis:**")
     col_logos_sidebar = st.sidebar.columns(len(dados_marcas))
     for idx, (nome_marca, df_marca) in enumerate(dados_marcas.items()):
@@ -1578,12 +1249,10 @@ def main():
                 except Exception as e:
                     logger.error(f"Erro ao carregar logo {logo_path}: {str(e)}")
             st.caption(nome_marca)
-    
     st.sidebar.markdown("---")
     if st.sidebar.button("🔄 Forçar Atualização", help="Limpa o cache e recarrega todos os dados das planilhas"):
         st.cache_data.clear()
         st.rerun()
-    
     if pdv_selecionado == 'TODAS':
         st.markdown(f"""
         <div style="
@@ -1608,32 +1277,300 @@ def main():
             <span style="color:#D4AF37;font-weight:700;font-size:15px;">{loja_selecionada_nome}</span>
         </div>
         """, unsafe_allow_html=True)
-    
     if marca_selecionada == "Todas as Marcas":
         dados_filtrados = dados_marcas
         titulo_secao = "Consolidado Geral"
     else:
         dados_filtrados = {marca_selecionada: dados_marcas[marca_selecionada]}
         titulo_secao = f"Análise: {marca_selecionada}"
-    
     st.markdown(f"### {titulo_secao}")
     st.markdown("---")
-    
     v_estoque_atual_total = 0
     v_estoque_min_total = 0
     v_excesso_total_total = 0
     v_falta_total_total = 0
     qtd_itens_total = 0
-    
     for nome_marca, df_completo in dados_filtrados.items():
         if pdv_selecionado == 'TODAS':
             df_loja = df_completo
         else:
             df_loja = df_completo[df_completo['PDV'] == pdv_selecionado]
-        
         if not df_loja.empty:
             v_estoque_atual_total += df_loja['Valor_Estoque_Atual'].sum()
             v_estoque_min_total += df_loja['Valor_Estoque_Minimo'].sum()
             v_excesso_total_total += df_loja['Valor_Excesso'].sum()
             v_falta_total_total += df_loja['Valor_Falta'].sum()
-            qtd_itens_total += df_loja['Est
+            qtd_itens_total += df_loja['Estoque Atual'].sum()
+    col1, col2, col3, col4 = st.columns(4)
+    exibir_kpi_card(
+        col1, "💰", "Valor em Estoque", f"R$ {v_estoque_atual_total:,.2f}",
+        help_text="Soma de (Estoque Atual × Preço Tabela) para todos os SKUs (excluindo ignorados)"
+    )
+    exibir_kpi_card(
+        col2, "📉", "Estoque Mínimo", f"R$ {v_estoque_min_total:,.2f}",
+        help_text="Soma de (Estoque Mínimo × Preço Tabela) - valor ideal de estoque"
+    )
+    pct_excesso = f"{((v_excesso_total_total/v_estoque_atual_total)*100 if v_estoque_atual_total > 0 else 0):.1f}%"
+    exibir_kpi_card(
+        col3, "⚠️", "Capital Preso", f"R$ {v_excesso_total_total:,.2f}",
+        delta_texto=f"{pct_excesso} do estoque", cor_delta="#f59e0b",
+        help_text="Valor do estoque acima do mínimo (Estoque Atual - Estoque Mínimo) × Preço Tabela"
+    )
+    exibir_kpi_card(
+        col4, "🚨", "Risco de Ruptura", f"R$ {v_falta_total_total:,.2f}",
+        delta_texto="Abaixo do Mínimo", cor_delta="#ef4444",
+        help_text="Valor necessário para atingir o estoque mínimo (Estoque Mínimo - Estoque Atual) × Preço Tabela"
+    )
+    st.markdown("---")
+    st.subheader("📦 Cobertura de Estoque por Classe (Estoque Atual / DDV)")
+    st.caption("DDV = Demanda Diária de Venda (detecção dinâmica por regex). Cobertura = quantos dias o estoque atual dura.")
+    df_cobertura_classes = pd.DataFrame()
+    for nome_marca, df_completo in dados_filtrados.items():
+        if pdv_selecionado == 'TODAS':
+            df_loja = df_completo
+        else:
+            df_loja = df_completo[df_completo['PDV'] == pdv_selecionado]
+        if not df_loja.empty and 'Classe' in df_loja.columns and 'DDV' in df_loja.columns:
+            df_valido = df_loja[df_loja['DDV'] > 0].copy()
+            if not df_valido.empty:
+                df_classe = df_valido.groupby('Classe').agg({
+                    'Cobertura_Estoque': 'mean',
+                    'DDV': 'mean',
+                    'Estoque Atual': 'sum',
+                    'SKU': 'count'
+                }).reset_index()
+                df_classe.columns = ['Classe', 'Cobertura (dias)', 'DDV Médio', 'Estoque Total', 'Qtd SKUs']
+                df_classe['Marca'] = nome_marca
+                df_cobertura_classes = pd.concat([df_cobertura_classes, df_classe], ignore_index=True)
+    if not df_cobertura_classes.empty:
+        if marca_selecionada == "Todas as Marcas":
+            df_pivot_cob = df_cobertura_classes.pivot_table(
+                values='Cobertura (dias)',
+                index='Classe',
+                columns='Marca',
+                aggfunc='mean',
+                fill_value=0
+            ).reset_index()
+            colunas_marcas_cob = [col for col in df_pivot_cob.columns if col != 'Classe']
+            df_pivot_cob['Média Geral'] = df_pivot_cob[colunas_marcas_cob].mean(axis=1)
+            for col in colunas_marcas_cob + ['Média Geral']:
+                df_pivot_cob[col] = df_pivot_cob[col].apply(lambda x: f"{x:,.1f}")
+            st.dataframe(df_pivot_cob, width='stretch', hide_index=True)
+        else:
+            df_exibicao_cob = df_cobertura_classes[['Classe', 'Cobertura (dias)', 'DDV Médio', 'Estoque Total', 'Qtd SKUs']].copy()
+            df_exibicao_cob = df_exibicao_cob.sort_values('Classe')
+            df_exibicao_cob['Cobertura (dias)'] = df_exibicao_cob['Cobertura (dias)'].apply(lambda x: f"{x:,.1f}")
+            df_exibicao_cob['DDV Médio'] = df_exibicao_cob['DDV Médio'].apply(lambda x: f"{x:,.2f}")
+            df_exibicao_cob['Estoque Total'] = df_exibicao_cob['Estoque Total'].apply(lambda x: f"{int(x):,}")
+            st.dataframe(df_exibicao_cob, width='stretch', hide_index=True)
+        fig_cobertura = go.Figure()
+        if marca_selecionada == "Todas as Marcas":
+            for nome_marca in dados_filtrados.keys():
+                df_mc_cob = df_cobertura_classes[df_cobertura_classes['Marca'] == nome_marca]
+                if not df_mc_cob.empty:
+                    fig_cobertura.add_trace(go.Bar(
+                        x=df_mc_cob['Classe'],
+                        y=df_mc_cob['Cobertura (dias)'],
+                        name=nome_marca,
+                        marker_color=CORES_MARCAS.get(nome_marca, '#007A33')
+                    ))
+            fig_cobertura.update_layout(barmode='group')
+        else:
+            fig_cobertura.add_trace(go.Bar(
+                x=df_cobertura_classes['Classe'],
+                y=df_cobertura_classes['Cobertura (dias)'],
+                marker_color=[CORES_MARCAS.get(marca_selecionada, '#007A33')] * len(df_cobertura_classes),
+                text=[f"{v:,.1f}" for v in df_cobertura_classes['Cobertura (dias)']],
+                textposition='auto'
+            ))
+        fig_cobertura.update_layout(
+            template='plotly_dark',
+            plot_bgcolor='rgba(0,0,0,0)',
+            paper_bgcolor='rgba(0,0,0,0)',
+            height=400,
+            xaxis_title='Classe',
+            yaxis_title='Cobertura de Estoque (dias)',
+            title='Cobertura de Estoque por Classe (dias que o estoque dura)'
+        )
+        st.plotly_chart(fig_cobertura, width='stretch')
+    else:
+        st.info("ℹ️ Nenhum dado de cobertura disponível para os filtros selecionados (verifique se há histórico de vendas nas colunas detectadas).")
+    st.markdown("---")
+    if marca_selecionada == "Todas as Marcas":
+        st.subheader("📊 Comparativo entre Marcas")
+        dados_grafico = []
+        for nome_marca, df_completo in dados_marcas.items():
+            if pdv_selecionado == 'TODAS':
+                df_loja = df_completo
+            else:
+                df_loja = df_completo[df_completo['PDV'] == pdv_selecionado]
+            if not df_loja.empty:
+                dados_grafico.append({
+                    'Marca': nome_marca,
+                    'Qtd Itens': int(df_loja['Estoque Atual'].sum()),
+                    'Custo Total': df_loja['Valor_Custo_Estoque_Atual'].sum()
+                })
+        if dados_grafico:
+            df_grafico_marcas = pd.DataFrame(dados_grafico)
+            col_graf1, col_graf2 = st.columns(2)
+            with col_graf1:
+                fig_qtd = go.Figure()
+                fig_qtd.add_trace(go.Bar(
+                    x=df_grafico_marcas['Marca'], y=df_grafico_marcas['Qtd Itens'],
+                    name='Quantidade de Itens',
+                    marker_color=[CORES_MARCAS.get(m, '#007A33') for m in df_grafico_marcas['Marca']],
+                    text=[f"{v:,.0f}" for v in df_grafico_marcas['Qtd Itens']], textposition='auto'
+                ))
+                fig_qtd.update_layout(template='plotly_dark', plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
+                                      height=400, title='Quantidade de Itens por Marca', yaxis_title='Qtd de Unidades')
+                st.plotly_chart(fig_qtd, width='stretch')
+            with col_graf2:
+                fig_custo = go.Figure()
+                fig_custo.add_trace(go.Bar(
+                    x=df_grafico_marcas['Marca'], y=df_grafico_marcas['Custo Total'],
+                    name='Custo Total',
+                    marker_color=[CORES_MARCAS.get(m, '#007A33') for m in df_grafico_marcas['Marca']],
+                    text=[f"R$ {v:,.0f}" for v in df_grafico_marcas['Custo Total']], textposition='auto'
+                ))
+                fig_custo.update_layout(template='plotly_dark', plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
+                                        height=400, title='Custo Total por Marca', yaxis_title='Valor (R$)')
+                st.plotly_chart(fig_custo, width='stretch')
+    st.markdown("---")
+    st.subheader("📊 Custo Total por Curva de Produto")
+    df_curva_consolidado = pd.DataFrame()
+    for nome_marca, df_completo in dados_filtrados.items():
+        if pdv_selecionado == 'TODAS':
+            df_loja = df_completo
+        else:
+            df_loja = df_completo[df_completo['PDV'] == pdv_selecionado]
+        if not df_loja.empty and 'Classe' in df_loja.columns:
+            df_agrupado = df_loja.groupby('Classe').agg({'Valor_Custo_Estoque_Atual': 'sum', 'SKU': 'count'}).reset_index()
+            df_agrupado.columns = ['Curva', 'Custo Total', 'Qtd SKUs']
+            df_agrupado['Marca'] = nome_marca
+            df_curva_consolidado = pd.concat([df_curva_consolidado, df_agrupado], ignore_index=True)
+    if not df_curva_consolidado.empty:
+        if marca_selecionada == "Todas as Marcas":
+            df_pivot = df_curva_consolidado.pivot_table(values='Custo Total', index='Curva', columns='Marca', aggfunc='sum', fill_value=0).reset_index()
+            colunas_marcas = [col for col in df_pivot.columns if col != 'Curva']
+            df_pivot['Total Geral'] = df_pivot[colunas_marcas].sum(axis=1)
+            linha_total = {'Curva': 'TOTAL'}
+            for col in colunas_marcas:
+                linha_total[col] = df_pivot[col].sum()
+            linha_total['Total Geral'] = df_pivot['Total Geral'].sum()
+            df_pivot = pd.concat([df_pivot, pd.DataFrame([linha_total])], ignore_index=True)
+            for col in colunas_marcas + ['Total Geral']:
+                df_pivot[col] = df_pivot[col].apply(lambda x: f"R$ {x:,.2f}")
+            st.dataframe(df_pivot, width='stretch', hide_index=True)
+        else:
+            df_exibicao = df_curva_consolidado[['Curva', 'Custo Total', 'Qtd SKUs']].copy().sort_values('Curva')
+            total_custo = df_exibicao['Custo Total'].sum()
+            total_skus = df_exibicao['Qtd SKUs'].sum()
+            df_total = pd.DataFrame([{'Curva': 'TOTAL', 'Custo Total': total_custo, 'Qtd SKUs': total_skus}])
+            df_exibicao = pd.concat([df_exibicao, df_total], ignore_index=True)
+            df_exibicao['Custo Total'] = df_exibicao['Custo Total'].apply(lambda x: f"R$ {x:,.2f}")
+            st.dataframe(df_exibicao, width='stretch', hide_index=True)
+        fig_custo = go.Figure()
+        if marca_selecionada == "Todas as Marcas":
+            for nome_marca in dados_filtrados.keys():
+                df_mc = df_curva_consolidado[df_curva_consolidado['Marca'] == nome_marca]
+                if not df_mc.empty:
+                    fig_custo.add_trace(go.Bar(x=df_mc['Curva'], y=df_mc['Custo Total'], name=nome_marca,
+                                               marker_color=CORES_MARCAS.get(nome_marca, '#007A33')))
+            fig_custo.update_layout(barmode='stack')
+        else:
+            fig_custo.add_trace(go.Bar(x=df_curva_consolidado['Curva'], y=df_curva_consolidado['Custo Total'],
+                                       marker_color=[CORES_MARCAS.get(marca_selecionada, '#007A33')] * len(df_curva_consolidado),
+                                       text=[f"R$ {v:,.2f}" for v in df_curva_consolidado['Custo Total']], textposition='auto'))
+        fig_custo.update_layout(template='plotly_dark', plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
+                                height=400, xaxis_title='Curva', yaxis_title='Custo Total (R$)', title='Distribuição de Custo por Curva')
+        st.plotly_chart(fig_custo, width='stretch')
+    st.markdown("---")
+    st.subheader("📊 Análise por Categoria")
+    df_categoria_consolidado = pd.DataFrame()
+    for nome_marca, df_completo in dados_filtrados.items():
+        if pdv_selecionado == 'TODAS':
+            df_loja = df_completo
+        else:
+            df_loja = df_completo[df_completo['PDV'] == pdv_selecionado]
+        if not df_loja.empty and 'Categoria' in df_loja.columns:
+            df_cat = df_loja.groupby('Categoria')[['Valor_Estoque_Atual', 'Valor_Estoque_Minimo']].sum().reset_index()
+            df_cat['Marca'] = nome_marca
+            df_categoria_consolidado = pd.concat([df_categoria_consolidado, df_cat], ignore_index=True)
+    if not df_categoria_consolidado.empty:
+        fig_cat = go.Figure()
+        if marca_selecionada == "Todas as Marcas":
+            for nome_marca in dados_filtrados.keys():
+                df_mc = df_categoria_consolidado[df_categoria_consolidado['Marca'] == nome_marca]
+                if not df_mc.empty:
+                    fig_cat.add_trace(go.Bar(x=df_mc['Categoria'], y=df_mc['Valor_Estoque_Atual'], name=nome_marca,
+                                             marker_color=CORES_MARCAS.get(nome_marca, '#007A33')))
+            fig_cat.update_layout(barmode='group')
+        else:
+            fig_cat.add_trace(go.Bar(x=df_categoria_consolidado['Categoria'], y=df_categoria_consolidado['Valor_Estoque_Atual'],
+                                     name='Estoque Atual', marker_color=CORES_MARCAS.get(marca_selecionada, '#007A33')))
+            fig_cat.add_trace(go.Bar(x=df_categoria_consolidado['Categoria'], y=df_categoria_consolidado['Valor_Estoque_Minimo'],
+                                     name='Estoque Mínimo', marker_color='#ff4b4b'))
+            fig_cat.update_layout(barmode='group')
+        fig_cat.update_layout(template='plotly_dark', plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
+                              height=400, xaxis_title='Categoria', yaxis_title='Valor (R$)', title='Estoque por Categoria')
+        st.plotly_chart(fig_cat, width='stretch')
+    st.markdown("---")
+    st.subheader("🚨 Produtos Críticos em Falta / Ruptura")
+    for nome_marca, df_completo in dados_filtrados.items():
+        if pdv_selecionado == 'TODAS':
+            df_loja = df_completo
+        else:
+            df_loja = df_completo[df_completo['PDV'] == pdv_selecionado]
+        if df_loja.empty:
+            continue
+        exibir_titulo_marca(nome_marca, tamanho_logo=35)
+        df_falta_tabela = df_loja[df_loja['Valor_Falta'] > 0][
+            ['SKU', 'Descrição', 'Classe', 'Estoque Atual', 'Estoque_Minimo_Qtd', 'Qtd_Falta', 'Preço de Custo', 'Valor_Falta']
+        ].rename(columns={'Preço de Custo': 'Preço Considerado'}).sort_values(by='Valor_Falta', ascending=False)
+        if df_falta_tabela.empty:
+            st.info(f"✅ Nenhum produto em falta encontrado para **{nome_marca}** nesta seleção.")
+        else:
+            total_falta_qtd = int(df_falta_tabela['Qtd_Falta'].sum())
+            total_falta_val = df_falta_tabela['Valor_Falta'].sum()
+            skus_falta = len(df_falta_tabela)
+            col_f1, col_f2, col_f3 = st.columns(3)
+            col_f1.metric("SKUs em falta", skus_falta)
+            col_f2.metric("Unidades em falta", f"{total_falta_qtd:,}")
+            col_f3.metric("Risco financeiro", f"R$ {total_falta_val:,.2f}")
+            st.dataframe(df_falta_tabela.style.format({'Preço Considerado': 'R$ {:.2f}', 'Valor_Falta': 'R$ {:.2f}'}),
+                         width='stretch', height=350)
+        st.markdown("---")
+    pdf_buffer = gerar_pdf_dashboard(
+        dados_filtrados=dados_filtrados,
+        pdv_selecionado=pdv_selecionado,
+        loja_selecionada_nome=loja_selecionada_nome,
+        marca_selecionada=marca_selecionada,
+        horario_brasilia=obter_horario_brasilia(),
+        v_estoque_atual_total=v_estoque_atual_total,
+        v_estoque_min_total=v_estoque_min_total,
+        v_excesso_total_total=v_excesso_total_total,
+        v_falta_total_total=v_falta_total_total,
+        qtd_itens_total=qtd_itens_total
+    )
+    if pdf_buffer is not None:
+        st.download_button(
+            label="📥 Exportar Relatório em PDF",
+            data=pdf_buffer,
+            file_name=f"relatorio_estoque_{pdv_selecionado if pdv_selecionado != 'TODAS' else 'TODAS_LOJAS'}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+            mime="application/pdf",
+            type="primary",
+            help="Gera um relatório PDF com os KPIs e tabela de faltas (SKUs ignorados excluídos)"
+        )
+    st.markdown(f"""
+    <div class="footer-rodape">
+        Dashboard de Estoque NSF · CP Fani |
+        Versão <span>{VERSAO}</span> ({DATA_VERSAO}) |
+        Modo: <span>{MODO_ACESSO.upper()}</span> |
+        Atualizado em <span>{horario_exibicao}</span>
+    </div>
+    <div style="height: 40px;"></div>
+    """, unsafe_allow_html=True)
+
+
+if __name__ == "__main__":
+    main()
